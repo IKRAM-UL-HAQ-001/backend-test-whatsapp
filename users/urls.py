@@ -1,0 +1,36 @@
+from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
+from .views import (
+    ActivateLinkToken,
+    CheckLinkStatus,
+    CompleteProfile,
+    DeleteAccount,
+    GenerateLinkToken,
+    InviteContact,
+    IssueWebSocketTicket,
+    ListUsers,
+    PresenceHeartbeat,
+    RequestOTP,
+    SyncContacts,
+    UpdateFcmToken,
+    UserPresence,
+    VerifyOTP,
+)
+
+urlpatterns = [
+    path("request-otp/", RequestOTP.as_view()),
+    path("verify-otp/", VerifyOTP.as_view()),
+    path("token/refresh/", TokenRefreshView.as_view()),
+    path("complete-profile/", CompleteProfile.as_view()),
+    path("update-fcm-token/", UpdateFcmToken.as_view()),
+    path("list-users/", ListUsers.as_view()),
+    path("generate-link-token/", GenerateLinkToken.as_view()),
+    path("activate-link-token/", ActivateLinkToken.as_view()),
+    path("check-link-status/<str:token>/", CheckLinkStatus.as_view()),
+    path("ws-ticket/", IssueWebSocketTicket.as_view()),
+    path("sync-contacts/", SyncContacts.as_view()),
+    path("invite-contact/", InviteContact.as_view()),
+    path("presence/heartbeat/", PresenceHeartbeat.as_view()),
+    path("presence/<int:user_id>/", UserPresence.as_view()),
+    path("delete-account/", DeleteAccount.as_view()),
+]

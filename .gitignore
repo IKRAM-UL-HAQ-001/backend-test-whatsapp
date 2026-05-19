@@ -1,0 +1,6 @@
+.venv
+.env
+service-account.json
+db.sqlite3
+media/
+staticfiles/
