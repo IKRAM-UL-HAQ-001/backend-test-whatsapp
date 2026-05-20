@@ -82,7 +82,8 @@ def send_push_notification(receiver, title, message, data=None):
         android=messaging.AndroidConfig(
             priority="high",
             notification=messaging.AndroidNotification(
-                sound="default",
+                channel_id="m2m_messages_custom_v2",
+                sound="notification",
                 click_action="FLUTTER_NOTIFICATION_CLICK",
             ),
         ),

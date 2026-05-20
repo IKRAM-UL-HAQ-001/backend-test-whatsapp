@@ -82,9 +82,9 @@ def send_message_notification(self, message_id, recipient_id):
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=messaging.AndroidNotification(
-                    channel_id="m2m_messages",
+                    channel_id="m2m_messages_custom_v2",
                     priority="high",
-                    default_sound=True,
+                    sound="notification",
                     default_vibrate_timings=True,
                     color="#6B00D7",
                 ),
