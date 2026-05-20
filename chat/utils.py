@@ -76,16 +76,10 @@ def send_push_notification(receiver, title, message, data=None):
     msg_data = {str(key): str(value) for key, value in msg_data.items()}
 
     fcm_message = messaging.Message(
-        notification=messaging.Notification(title=title, body=message),
         data=msg_data,
         token=receiver.fcm_token,
         android=messaging.AndroidConfig(
             priority="high",
-            notification=messaging.AndroidNotification(
-                channel_id="m2m_messages_custom_v2",
-                sound="notification",
-                click_action="FLUTTER_NOTIFICATION_CLICK",
-            ),
         ),
     )
 

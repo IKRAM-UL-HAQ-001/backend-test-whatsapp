@@ -67,11 +67,9 @@ def send_message_notification(self, message_id, recipient_id):
         sender_name = message.sender.name or "Someone"
 
         fcm_message = messaging.Message(
-            notification=messaging.Notification(
-                title=sender_name,
-                body=body,
-            ),
             data={
+                "title": sender_name,
+                "body": body,
                 "chat_id": str(message.chat.id),
                 "sender_id": str(message.sender.id),
                 "message_id": str(message.id),
@@ -81,13 +79,6 @@ def send_message_notification(self, message_id, recipient_id):
             },
             android=messaging.AndroidConfig(
                 priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="m2m_messages_custom_v2",
-                    priority="high",
-                    sound="notification",
-                    default_vibrate_timings=True,
-                    color="#6B00D7",
-                ),
             ),
             apns=messaging.APNSConfig(
                 payload=messaging.APNSPayload(
