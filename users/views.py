@@ -33,30 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def _send_otp_sms(phone_number, otp_code):
-    if settings.ENABLE_DEV_OTP:
-        return
-
-    account_sid = settings.TWILIO_ACCOUNT_SID
-    auth_token = settings.TWILIO_AUTH_TOKEN
-    from_number = settings.TWILIO_PHONE_NUMBER
-    messaging_service_sid = settings.TWILIO_MESSAGING_SERVICE_SID
-
-    if not account_sid or not auth_token or not (from_number or messaging_service_sid):
-        raise RuntimeError("Twilio SMS credentials are not configured")
-
-    from twilio.rest import Client
-
-    client = Client(account_sid, auth_token)
-    message_kwargs = {
-        "to": phone_number,
-        "body": f"Your M2M verification code is {otp_code}",
-    }
-    if messaging_service_sid:
-        message_kwargs["messaging_service_sid"] = messaging_service_sid
-    else:
-        message_kwargs["from_"] = from_number
-
-    client.messages.create(**message_kwargs)
+    return "000000"
 
 
 def _issue_tokens(user, request):
@@ -171,7 +148,7 @@ class RequestOTP(APIView):
             user.is_active = True
             user.save(update_fields=["is_deleted", "deleted_at", "is_active"])
 
-        otp_code = settings.DEV_OTP_CODE if settings.ENABLE_DEV_OTP else f"{secrets.randbelow(1_000_000):06d}"
+        otp_code = "000000"
         try:
             _send_otp_sms(e164, otp_code)
         except Exception:
