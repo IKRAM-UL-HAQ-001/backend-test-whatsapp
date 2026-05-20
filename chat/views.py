@@ -198,7 +198,7 @@ class ChatMessages(APIView):
             .exclude(id__in=deleted_ids)
             .exclude(deleted_for_users=request.user)
             .select_related("sender", "reply_to", "reply_to__sender", "forwarded_from", "forwarded_from__sender")
-            .prefetch_related("reactions", "statuses", "deleted_for_users")
+            .prefetch_related("reactions__user", "statuses", "deleted_for_users")
             .order_by("-created_at")
         )
 
@@ -417,6 +417,7 @@ class SharedMediaView(APIView):
         messages = (
             Message.objects.filter(chat=chat, file__isnull=False, is_deleted_for_everyone=False)
             .exclude(deleted_for_users=request.user)
+            .select_related("sender")
             .order_by("-created_at")
         )
 
@@ -618,6 +619,7 @@ class UserChats(APIView):
             Chat.objects.filter(Q(user1=request.user) | Q(user2=request.user))
             .exclude(Q(user1=request.user, deleted_for_user1=True) | Q(user2=request.user, deleted_for_user2=True))
             .select_related("user1", "user2")
+            .prefetch_related("messages")
             .annotate(
                 last_message_id=Subquery(last_message_queryset.values("id")[:1]),
                 last_message_content=Subquery(last_message_queryset.values("encrypted_text")[:1]),

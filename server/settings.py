@@ -53,8 +53,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "django.middleware.gzip.GZipMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -88,7 +90,7 @@ if DATABASE_URL:
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
-            conn_max_age=600,
+            conn_max_age=int(env("DB_CONN_MAX_AGE", "60")),
             conn_health_checks=True,
         )
     }
@@ -210,6 +212,11 @@ SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
 SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", False)
 CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", False)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = env_bool("USE_X_FORWARDED_HOST", not DEBUG)
+
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL or "memory://")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL or "cache+memory://")
