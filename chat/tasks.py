@@ -75,7 +75,7 @@ def send_message_notification(self, message_id, recipient_id):
                 "chat_id": str(message.chat.id),
                 "sender_id": str(message.sender.id),
                 "message_id": str(message.id),
-                "message_type": message.message_type,
+                "message_kind": message.message_type,
                 "sender_name": sender_name,
                 "click_action": "FLUTTER_NOTIFICATION_CLICK",
             },
