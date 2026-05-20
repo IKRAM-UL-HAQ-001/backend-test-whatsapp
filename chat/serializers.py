@@ -13,9 +13,35 @@ class MessageReactionSerializer(serializers.ModelSerializer):
 
 
 class ReplyForwardSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Message
-        fields = ["id", "sender", "encrypted_text", "message_type", "is_deleted_for_everyone", "created_at"]
+        fields = [
+            "id",
+            "sender",
+            "encrypted_text",
+            "message_type",
+            "is_deleted_for_everyone",
+            "file_url",
+            "file_name",
+            "file_type",
+            "thumbnail_url",
+            "created_at",
+        ]
+
+    def get_file_url(self, obj):
+        if not obj.file:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+
+    def get_thumbnail_url(self, obj):
+        if not obj.thumbnail:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
 
 
 class MessageStatusSerializer(serializers.ModelSerializer):

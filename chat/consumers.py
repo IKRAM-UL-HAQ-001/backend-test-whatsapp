@@ -121,7 +121,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 f"user_{sender_id}",
                 {
                     "type": "status_update_event",
-                    "payload": {"message_ids": ids, "chat_id": chat_id, "status": MessageStatus.DELIVERED},
+                    "payload": {
+                        "message_ids": ids,
+                        "chat_id": chat_id,
+                        "status": MessageStatus.DELIVERED,
+                        "delivered_at": now.isoformat(),
+                    },
                 },
             )
 
