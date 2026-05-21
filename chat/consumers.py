@@ -100,6 +100,33 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def status_viewed_event(self, event):
         await self._send_event("status_viewed", event.get("payload", {}))
 
+    async def call_invite_event(self, event):
+        await self._send_event("call_invite", event.get("payload", {}))
+
+    async def call_ringing_event(self, event):
+        await self._send_event("call_ringing", event.get("payload", {}))
+
+    async def call_accepted_event(self, event):
+        await self._send_event("call_accepted", event.get("payload", {}))
+
+    async def call_rejected_event(self, event):
+        await self._send_event("call_rejected", event.get("payload", {}))
+
+    async def call_cancelled_event(self, event):
+        await self._send_event("call_cancelled", event.get("payload", {}))
+
+    async def call_ended_event(self, event):
+        await self._send_event("call_ended", event.get("payload", {}))
+
+    async def call_missed_event(self, event):
+        await self._send_event("call_missed", event.get("payload", {}))
+
+    async def call_busy_event(self, event):
+        await self._send_event("call_busy", event.get("payload", {}))
+
+    async def call_failed_event(self, event):
+        await self._send_event("call_failed", event.get("payload", {}))
+
     @database_sync_to_async
     def mark_messages_delivered(self, message_ids):
         now = timezone.now()

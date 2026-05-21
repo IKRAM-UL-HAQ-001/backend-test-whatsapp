@@ -3,6 +3,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 import firebase_admin
 from firebase_admin import credentials
 
@@ -50,6 +51,7 @@ INSTALLED_APPS = [
     "users",
     "chat",
     "status",
+    "calls",
 ]
 
 MIDDLEWARE = [
@@ -111,7 +113,28 @@ else:
         }
     }
 
+# Production realtime and background jobs require Redis. In local development,
+# set DEBUG=True to allow in-memory Channels/cache and memory Celery defaults.
 REDIS_URL = env("REDIS_URL", "")
+# Optional overrides; in production these must remain Redis URLs.
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL or "memory://")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL or "cache+memory://")
+
+if not DEBUG and not REDIS_URL:
+    raise ImproperlyConfigured(
+        "REDIS_URL is required when DEBUG=False. "
+        "Production cannot use in-memory Channels/cache or memory Celery."
+    )
+
+if not DEBUG and not (
+    CELERY_BROKER_URL.startswith(("redis://", "rediss://"))
+    and CELERY_RESULT_BACKEND.startswith(("redis://", "rediss://"))
+):
+    raise ImproperlyConfigured(
+        "Production Celery requires Redis-backed CELERY_BROKER_URL and "
+        "CELERY_RESULT_BACKEND. Set REDIS_URL, or explicitly set both Celery "
+        "URLs to Redis endpoints."
+    )
 
 if REDIS_URL:
     CHANNEL_LAYERS = {
@@ -218,8 +241,6 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL or "memory://")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL or "cache+memory://")
 CELERY_BEAT_SCHEDULE = {
     "cleanup-expired-statuses-hourly": {
         "task": "status.tasks.cleanup_expired_statuses",
@@ -231,6 +252,13 @@ FIREBASE_PROJECT_ID = env("FIREBASE_PROJECT_ID", "")
 FIREBASE_CLIENT_EMAIL = env("FIREBASE_CLIENT_EMAIL", "")
 FIREBASE_PRIVATE_KEY = env("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
 FIREBASE_CREDENTIALS_PATH = env("FIREBASE_CREDENTIALS_PATH", "firebase-credentials.json")
+
+# LiveKit token generation. Production should set these from the self-hosted
+# LiveKit server config; never expose LIVEKIT_API_SECRET to clients.
+LIVEKIT_URL="wss://livekit.qubrixe.com"
+LIVEKIT_API_KEY="d8fd03b13da97650db3d0640"
+LIVEKIT_API_SECRET="1a7c83220bd57f8bb8d43d28ea486ff9f99a8df267be3589249234de2ba9a780"
+LIVEKIT_TOKEN_TTL_MINUTES = "15"
 
 if not firebase_admin._apps and os.path.exists(FIREBASE_CREDENTIALS_PATH):
     cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)

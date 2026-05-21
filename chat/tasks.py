@@ -4,6 +4,7 @@ from .utils import send_push_notification
 from .utils import get_firebase_app
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.core.cache import cache
 from firebase_admin import messaging
 from django.utils import timezone
 
@@ -48,6 +49,12 @@ def send_message_notification(self, message_id, recipient_id):
             Message.objects.select_related("sender", "chat")
             .get(id=message_id)
         )
+        sent_key = f"push-sent:message:{message.id}:recipient:{recipient.id}"
+        lock_key = f"push-lock:message:{message.id}:recipient:{recipient.id}"
+        if cache.get(sent_key):
+            return "Push already sent for message"
+        if not cache.add(lock_key, "1", timeout=300):
+            return "Push send already in progress"
 
         if message.message_type == "text":
             body = message.encrypted_text or ""
@@ -96,6 +103,8 @@ def send_message_notification(self, message_id, recipient_id):
         )
 
         messaging.send(fcm_message)
+        cache.set(sent_key, "1", timeout=60 * 60 * 24 * 7)
+        cache.delete(lock_key)
 
         now = timezone.now()
         updated = Message.objects.filter(
@@ -119,4 +128,8 @@ def send_message_notification(self, message_id, recipient_id):
         return f"Notification sent to {recipient.phone_number}"
 
     except Exception as exc:
+        try:
+            cache.delete(f"push-lock:message:{message_id}:recipient:{recipient_id}")
+        except Exception:
+            pass
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
