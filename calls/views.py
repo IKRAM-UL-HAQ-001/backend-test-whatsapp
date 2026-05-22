@@ -19,7 +19,7 @@ from .livekit import delete_room, generate_join_token, is_room_not_found_error, 
 from .models import CallSession
 from .realtime import send_call_event
 from .serializers import CallSessionSerializer, StartCallSerializer
-from .tasks import send_incoming_call_notification
+from .tasks import mark_call_missed_if_unanswered, send_incoming_call_notification
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,16 @@ def queue_incoming_call_notification(call_id):
         send_incoming_call_notification.delay(call_id)
     except Exception as exc:
         logger.warning("Failed to queue incoming call notification for call_id=%s: %s", call_id, exc)
+
+
+def queue_missed_call_timeout(call_id):
+    try:
+        mark_call_missed_if_unanswered.apply_async(
+            (call_id,),
+            countdown=settings.CALL_RING_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("Failed to queue missed call timeout for call_id=%s: %s", call_id, exc)
 
 
 def cleanup_livekit_room(call):
@@ -115,6 +125,7 @@ class StartCall(APIView):
         send_call_event(receiver.id, "call_invite", call)
         send_call_event(request.user.id, "call_ringing", call)
         queue_incoming_call_notification(call.id)
+        queue_missed_call_timeout(call.id)
         return Response(CallSessionSerializer(call, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 

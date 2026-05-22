@@ -12,6 +12,7 @@ from rest_framework.test import APIClient, APITestCase
 from .models import CallSession
 from .livekit import generate_join_token, livekit_identity
 from .notifications import incoming_call_payload, missed_call_payload, send_incoming_call_push
+from .tasks import mark_call_missed_if_unanswered
 
 
 class DummyChannelLayer:
@@ -500,6 +501,95 @@ class CallSessionApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 201)
         delay_mock.assert_called_once_with(response.data["id"])
+
+    @override_settings(CALL_RING_TIMEOUT_SECONDS=60)
+    @patch("calls.views.mark_call_missed_if_unanswered.apply_async")
+    def test_start_call_schedules_missed_call_timeout(self, apply_async_mock):
+        response = self.start_call()
+
+        self.assertEqual(response.status_code, 201)
+        apply_async_mock.assert_called_once_with((response.data["id"],), countdown=60)
+
+    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_call_event")
+    def test_ringing_call_becomes_missed_after_timeout_task(self, event_mock, delay_mock):
+        call = self.create_ringing_call()
+
+        result = mark_call_missed_if_unanswered(call.id)
+        call.refresh_from_db()
+
+        self.assertEqual(result, "Call marked missed")
+        self.assertEqual(call.status, CallSession.Status.MISSED)
+        self.assertIsNotNone(call.ended_at)
+        self.assertEqual(call.duration_seconds, 0)
+        self.assertIsNone(call.ended_by)
+        event_mock.assert_any_call(self.caller.id, "call_missed", call)
+        event_mock.assert_any_call(self.receiver.id, "call_missed", call)
+        delay_mock.assert_called_once_with(call.id)
+
+    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_call_event")
+    def test_accepted_call_is_not_marked_missed(self, event_mock, delay_mock):
+        call = self.create_accepted_call()
+
+        result = mark_call_missed_if_unanswered(call.id)
+        call.refresh_from_db()
+
+        self.assertEqual(result, f"Call already {CallSession.Status.ACCEPTED}")
+        self.assertEqual(call.status, CallSession.Status.ACCEPTED)
+        event_mock.assert_not_called()
+        delay_mock.assert_not_called()
+
+    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_call_event")
+    def test_rejected_call_is_not_marked_missed(self, event_mock, delay_mock):
+        call = self.create_ringing_call()
+        call.status = CallSession.Status.REJECTED
+        call.ended_at = timezone.now()
+        call.ended_by = self.receiver
+        call.save(update_fields=["status", "ended_at", "ended_by", "updated_at"])
+
+        result = mark_call_missed_if_unanswered(call.id)
+        call.refresh_from_db()
+
+        self.assertEqual(result, f"Call already {CallSession.Status.REJECTED}")
+        self.assertEqual(call.status, CallSession.Status.REJECTED)
+        self.assertEqual(call.ended_by, self.receiver)
+        event_mock.assert_not_called()
+        delay_mock.assert_not_called()
+
+    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_call_event")
+    def test_cancelled_call_is_not_marked_missed(self, event_mock, delay_mock):
+        call = self.create_ringing_call()
+        call.status = CallSession.Status.CANCELLED
+        call.ended_at = timezone.now()
+        call.ended_by = self.caller
+        call.save(update_fields=["status", "ended_at", "ended_by", "updated_at"])
+
+        result = mark_call_missed_if_unanswered(call.id)
+        call.refresh_from_db()
+
+        self.assertEqual(result, f"Call already {CallSession.Status.CANCELLED}")
+        self.assertEqual(call.status, CallSession.Status.CANCELLED)
+        self.assertEqual(call.ended_by, self.caller)
+        event_mock.assert_not_called()
+        delay_mock.assert_not_called()
+
+    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.realtime.get_channel_layer")
+    def test_missed_event_is_emitted(self, channel_layer_mock, delay_mock):
+        layer = DummyChannelLayer()
+        channel_layer_mock.return_value = layer
+        call = self.create_ringing_call()
+
+        mark_call_missed_if_unanswered(call.id)
+        call.refresh_from_db()
+
+        self.assertEqual(len(layer.calls), 2)
+        self.assert_call_event(layer, 0, f"user_{self.caller.id}", "call_missed", call)
+        self.assert_call_event(layer, 1, f"user_{self.receiver.id}", "call_missed", call)
+        delay_mock.assert_called_once_with(call.id)
 
     @patch("calls.realtime.get_channel_layer")
     def test_accept_call_sends_call_accepted_to_caller_group(self, channel_layer_mock):
