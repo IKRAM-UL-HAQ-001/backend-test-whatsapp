@@ -78,3 +78,89 @@ def mark_call_missed_if_unanswered(call_id):
         logger.warning("Failed to queue missed call notification for call_id=%s: %s", call.id, exc)
         return "Call marked missed; missed push queue failed"
     return "Call marked missed"
+
+
+def cleanup_stale_active_calls(user_ids=None):
+    """
+    Find accepted or active calls older than ACTIVE_CALL_STALE_TIMEOUT_SECONDS and clean them up
+    if their LiveKit room has 0 participants, or is missing, or if LiveKit API is unavailable
+    and the call has had no update (heartbeat) for the timeout duration.
+    """
+    from django.conf import settings
+    from django.utils import timezone
+    from django.db.models import Q
+    from django.core.exceptions import ImproperlyConfigured
+    from .models import CallSession
+    from .livekit import check_room_state, delete_room, is_room_not_found_error
+    from .realtime import send_call_event
+
+    now = timezone.now()
+    timeout_seconds = getattr(settings, "ACTIVE_CALL_STALE_TIMEOUT_SECONDS", 180)
+    cutoff_time = now - timezone.timedelta(seconds=timeout_seconds)
+
+    query = Q(status__in=[CallSession.Status.ACCEPTED, CallSession.Status.ACTIVE])
+    
+    if user_ids:
+        query &= (Q(caller_id__in=user_ids) | Q(receiver_id__in=user_ids))
+
+    query &= (Q(accepted_at__lt=cutoff_time) | Q(accepted_at__isnull=True, created_at__lt=cutoff_time))
+
+    candidates = CallSession.objects.filter(query)
+    cleaned_count = 0
+
+    for call in candidates:
+        exists, participant_count, is_available = check_room_state(call.room_name)
+
+        should_cleanup = False
+        if is_available:
+            if not exists or participant_count == 0:
+                should_cleanup = True
+        else:
+            if call.updated_at < cutoff_time:
+                should_cleanup = True
+
+        if should_cleanup:
+            with transaction.atomic():
+                call_locked = CallSession.objects.select_for_update().filter(id=call.id).first()
+                if not call_locked or call_locked.status not in [CallSession.Status.ACCEPTED, CallSession.Status.ACTIVE]:
+                    continue
+
+                call_locked.status = CallSession.Status.ENDED
+                call_locked.ended_at = now
+                if call_locked.accepted_at:
+                    call_locked.duration_seconds = max(0, int((now - call_locked.accepted_at).total_seconds()))
+                else:
+                    call_locked.duration_seconds = call_locked.calculate_duration()
+                call_locked.ended_by = None
+                call_locked.save(update_fields=["status", "ended_at", "duration_seconds", "ended_by", "updated_at"])
+                call = call_locked
+
+            try:
+                send_call_event(call.caller_id, "call_ended", call)
+                send_call_event(call.receiver_id, "call_ended", call)
+            except Exception as exc:
+                logger.warning("Failed to emit end call events for stale call_id=%s: %s", call.id, exc)
+
+            try:
+                delete_room(call.room_name)
+            except ImproperlyConfigured as exc:
+                logger.info("LiveKit room cleanup skipped for stale call_id=%s: %s", call.id, exc)
+            except Exception as exc:
+                if is_room_not_found_error(exc):
+                    logger.info("LiveKit room already absent for stale call_id=%s room=%s", call.id, call.room_name)
+                else:
+                    logger.warning("LiveKit room cleanup failed for stale call_id=%s: %s", call.id, exc)
+
+            cleaned_count += 1
+
+    return cleaned_count
+
+
+@shared_task
+def cleanup_stale_active_calls_task():
+    try:
+        count = cleanup_stale_active_calls()
+        return f"Cleaned up {count} stale active calls"
+    except Exception as exc:
+        logger.exception("Error in cleanup_stale_active_calls_task: %s", exc)
+        raise

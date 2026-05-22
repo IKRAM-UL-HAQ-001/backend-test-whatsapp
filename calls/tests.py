@@ -699,3 +699,154 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(result, "Invalid FCM token cleared")
         self.receiver.refresh_from_db()
         self.assertIsNone(self.receiver.fcm_token)
+
+    @patch("calls.livekit.check_room_state")
+    def test_stale_call_cleanup_missing_room(self, mock_check):
+        # 1. Active call with missing LiveKit room is cleaned (treated as stale)
+        mock_check.return_value = (False, 0, True)
+
+        call = self.create_accepted_call()
+        call.accepted_at = timezone.now() - timedelta(seconds=200)
+        call.save(update_fields=["accepted_at", "updated_at"])
+
+        from .tasks import cleanup_stale_active_calls
+        cleaned_count = cleanup_stale_active_calls()
+
+        self.assertEqual(cleaned_count, 1)
+        call.refresh_from_db()
+        self.assertEqual(call.status, CallSession.Status.ENDED)
+        self.assertIsNotNone(call.ended_at)
+        self.assertGreaterEqual(call.duration_seconds, 200)
+
+    @patch("calls.livekit.check_room_state")
+    def test_active_call_with_participants_not_cleaned(self, mock_check):
+        # 2. Active call with participant count > 0 is not cleaned
+        mock_check.return_value = (True, 2, True)
+
+        call = self.create_accepted_call()
+        call.accepted_at = timezone.now() - timedelta(seconds=200)
+        call.save(update_fields=["accepted_at", "updated_at"])
+
+        from .tasks import cleanup_stale_active_calls
+        cleaned_count = cleanup_stale_active_calls()
+
+        self.assertEqual(cleaned_count, 0)
+        call.refresh_from_db()
+        self.assertEqual(call.status, CallSession.Status.ACCEPTED)
+
+    @patch("calls.livekit.check_room_state")
+    def test_livekit_api_failure_fallback_to_heartbeat_not_stale(self, mock_check):
+        # 3. LiveKit API failure does not crash and uses heartbeat (updated_at)
+        mock_check.return_value = (False, 0, False)
+
+        call = self.create_accepted_call()
+        call.accepted_at = timezone.now() - timedelta(seconds=200)
+        call.save(update_fields=["accepted_at"])
+
+        from .tasks import cleanup_stale_active_calls
+        cleaned_count = cleanup_stale_active_calls()
+
+        self.assertEqual(cleaned_count, 0)
+        call.refresh_from_db()
+        self.assertEqual(call.status, CallSession.Status.ACCEPTED)
+
+    @patch("calls.livekit.check_room_state")
+    def test_livekit_api_failure_fallback_to_heartbeat_stale(self, mock_check):
+        # 4. LiveKit API failure (is_available=False) and updated_at older than timeout -> cleaned!
+        mock_check.return_value = (False, 0, False)
+
+        call = self.create_accepted_call()
+        call.accepted_at = timezone.now() - timedelta(seconds=200)
+        call.save(update_fields=["accepted_at"])
+        CallSession.objects.filter(id=call.id).update(updated_at=timezone.now() - timedelta(seconds=200))
+
+        from .tasks import cleanup_stale_active_calls
+        cleaned_count = cleanup_stale_active_calls()
+
+        self.assertEqual(cleaned_count, 1)
+        call.refresh_from_db()
+        self.assertEqual(call.status, CallSession.Status.ENDED)
+
+    @patch("calls.livekit.check_room_state")
+    @patch("calls.realtime.get_channel_layer")
+    def test_events_emitted_on_cleanup(self, channel_layer_mock, mock_check):
+        # 5. Events emitted on cleanup
+        mock_check.return_value = (False, 0, True)
+        layer = DummyChannelLayer()
+        channel_layer_mock.return_value = layer
+
+        call = self.create_accepted_call()
+        call.accepted_at = timezone.now() - timedelta(seconds=200)
+        call.save(update_fields=["accepted_at", "updated_at"])
+
+        from .tasks import cleanup_stale_active_calls
+        cleanup_stale_active_calls()
+
+        call.refresh_from_db()
+        self.assertEqual(len(layer.calls), 2)
+        self.assert_call_event(layer, 0, f"user_{self.caller.id}", "call_ended", call)
+        self.assert_call_event(layer, 1, f"user_{self.receiver.id}", "call_ended", call)
+
+    @patch("calls.livekit.check_room_state")
+    def test_start_call_clears_stale_busy_call(self, mock_check):
+        # 6. start call clears stale busy call before returning busy
+        mock_check.return_value = (False, 0, True)
+
+        stale_call = CallSession.objects.create(
+            caller=self.third,
+            receiver=self.receiver,
+            call_type=CallSession.CallType.AUDIO,
+            status=CallSession.Status.ACCEPTED,
+            room_name="receiver-stale-room",
+            accepted_at=timezone.now() - timedelta(seconds=200),
+        )
+
+        self.assertEqual(CallSession.objects.filter(status=CallSession.Status.ACCEPTED).count(), 1)
+
+        response = self.start_call()
+
+        self.assertEqual(response.status_code, 201)
+        stale_call.refresh_from_db()
+        self.assertEqual(stale_call.status, CallSession.Status.ENDED)
+
+    @override_settings(
+        LIVEKIT_URL="wss://livekit.qubrixe.com",
+        LIVEKIT_API_KEY="test-key",
+        LIVEKIT_API_SECRET="test-secret",
+    )
+    def test_check_room_state_success(self):
+        # 7. Unit test check_room_state success and not_found behavior
+        class DummyRoom:
+            def __init__(self, name, num_participants):
+                self.name = name
+                self.num_participants = num_participants
+
+        class DummyListRoomsResponse:
+            def __init__(self, rooms):
+                self.rooms = rooms
+
+        class DummyRoomService:
+            async def list_rooms(self, req):
+                return DummyListRoomsResponse([DummyRoom("my-room", 3)])
+
+            async def delete_room(self, req):
+                pass
+
+        class DummyLiveKitAPI:
+            def __init__(self, url, key, secret):
+                self.room = DummyRoomService()
+
+            async def aclose(self):
+                pass
+
+        from .livekit import check_room_state
+        with patch("calls.livekit.livekit_api.LiveKitAPI", DummyLiveKitAPI):
+            exists, count, is_available = check_room_state("my-room")
+            self.assertTrue(exists)
+            self.assertEqual(count, 3)
+            self.assertTrue(is_available)
+
+            exists, count, is_available = check_room_state("other-room")
+            self.assertFalse(exists)
+            self.assertEqual(count, 0)
+            self.assertTrue(is_available)

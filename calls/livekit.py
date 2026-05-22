@@ -1,4 +1,5 @@
 from datetime import timedelta
+import logging
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
@@ -8,6 +9,8 @@ try:
     from livekit import api as livekit_api
 except ImportError:
     livekit_api = None
+
+logger = logging.getLogger(__name__)
 
 
 def _require_livekit_config():
@@ -82,3 +85,38 @@ def is_room_not_found_error(exc):
         or str(status) == "404"
         or ("code=not_found" in message and "status=404" in message)
     )
+
+
+async def _check_room_state_async(room_name):
+    _require_livekit_config()
+    client = livekit_api.LiveKitAPI(
+        settings.LIVEKIT_URL,
+        settings.LIVEKIT_API_KEY,
+        settings.LIVEKIT_API_SECRET,
+    )
+    try:
+        req = livekit_api.ListRoomsRequest(names=[room_name])
+        res = await client.room.list_rooms(req)
+        for room in res.rooms:
+            if room.name == room_name:
+                return True, room.num_participants
+        return False, 0
+    finally:
+        await client.aclose()
+
+
+def check_room_state(room_name):
+    if not room_name:
+        return False, 0, True
+    try:
+        exists, participant_count = async_to_sync(_check_room_state_async)(room_name)
+        return exists, participant_count, True
+    except ImproperlyConfigured as exc:
+        logger.warning("LiveKit configuration is missing or incomplete: %s", exc)
+        return False, 0, False
+    except Exception as exc:
+        if is_room_not_found_error(exc):
+            logger.info("LiveKit room not found for room=%s", room_name)
+            return False, 0, True
+        logger.warning("LiveKit API error checking room state for room=%s: %s", room_name, exc)
+        return False, 0, False

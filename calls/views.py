@@ -88,6 +88,12 @@ class StartCall(APIView):
         serializer.is_valid(raise_exception=True)
         receiver = serializer.context["receiver"]
 
+        try:
+            from .tasks import cleanup_stale_active_calls
+            cleanup_stale_active_calls(user_ids=[request.user.id, receiver.id])
+        except Exception as exc:
+            logger.warning("Lightweight stale call cleanup failed during start call: %s", exc)
+
         with transaction.atomic():
             User = get_user_model()
             list(

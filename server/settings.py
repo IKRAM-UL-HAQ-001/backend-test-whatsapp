@@ -228,6 +228,7 @@ LINK_STATUS_POLL_SECONDS = int(env("LINK_STATUS_POLL_SECONDS", "1"))
 WEBSOCKET_TICKET_TTL_SECONDS = int(env("WEBSOCKET_TICKET_TTL_SECONDS", "30"))
 PRESENCE_TTL_SECONDS = int(env("PRESENCE_TTL_SECONDS", "45"))
 CALL_RING_TIMEOUT_SECONDS = int(env("CALL_RING_TIMEOUT_SECONDS", "60"))
+ACTIVE_CALL_STALE_TIMEOUT_SECONDS = int(env("ACTIVE_CALL_STALE_TIMEOUT_SECONDS", "180"))
 CONTACT_DEFAULT_COUNTRY_CODE = env("CONTACT_DEFAULT_COUNTRY_CODE", "+92")
 
 SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)
@@ -247,6 +248,10 @@ CELERY_BEAT_SCHEDULE = {
     "cleanup-expired-statuses-hourly": {
         "task": "status.tasks.cleanup_expired_statuses",
         "schedule": 3600.0,
+    },
+    "cleanup-stale-active-calls-every-minute": {
+        "task": "calls.tasks.cleanup_stale_active_calls_task",
+        "schedule": 60.0,
     },
 }
 
