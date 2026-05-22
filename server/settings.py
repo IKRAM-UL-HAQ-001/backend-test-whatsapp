@@ -113,12 +113,13 @@ else:
         }
     }
 
-# Production realtime and background jobs require Redis. In local development,
-# set DEBUG=True to allow in-memory Channels/cache and memory Celery defaults.
-REDIS_URL = env("REDIS_URL", "")
+# Redis-backed realtime and background jobs. Local development defaults to a
+# local Redis server so runserver/Celery do not need repeated shell exports.
+# Production should still set these explicitly in the process environment.
+REDIS_URL = env("REDIS_URL", "redis://localhost:6379/0")
 # Optional overrides; in production these must remain Redis URLs.
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL or "memory://")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL or "cache+memory://")
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 
 if not DEBUG and not REDIS_URL:
     raise ImproperlyConfigured(
