@@ -255,9 +255,9 @@ FIREBASE_CREDENTIALS_PATH = env("FIREBASE_CREDENTIALS_PATH", "firebase-credentia
 
 # LiveKit token generation. Production should set these from the self-hosted
 # LiveKit server config; never expose LIVEKIT_API_SECRET to clients.
-LIVEKIT_URL="wss://livekit.qubrixe.com"
 LIVEKIT_API_KEY="d8fd03b13da97650db3d0640"
 LIVEKIT_API_SECRET="1a7c83220bd57f8bb8d43d28ea486ff9f99a8df267be3589249234de2ba9a780"
+LIVEKIT_URL="wss://livekit.qubrixe.com"
 LIVEKIT_TOKEN_TTL_MINUTES = "15"
 
 if not firebase_admin._apps and os.path.exists(FIREBASE_CREDENTIALS_PATH):

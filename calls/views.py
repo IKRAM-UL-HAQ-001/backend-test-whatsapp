@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from .livekit import delete_room, generate_join_token
+from .livekit import delete_room, generate_join_token, is_room_not_found_error, livekit_identity
 from .models import CallSession
 from .realtime import send_call_event
 from .serializers import CallSessionSerializer, StartCallSerializer
@@ -59,6 +59,9 @@ def cleanup_livekit_room(call):
     except ImproperlyConfigured as exc:
         logger.warning("LiveKit room cleanup skipped for call_id=%s: %s", call.id, exc)
     except Exception as exc:
+        if is_room_not_found_error(exc):
+            logger.info("LiveKit room already absent for call_id=%s room=%s", call.id, call.room_name)
+            return
         logger.warning("LiveKit room cleanup failed for call_id=%s: %s", call.id, exc)
 
 
@@ -168,6 +171,15 @@ class JoinCall(APIView):
                 {"detail": "LiveKit is not configured", "code": "livekit_not_configured"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        logger.info(
+            "LiveKit join token generated call_id=%s user_id=%s identity=%s room_name=%s server_url=%s token_length=%s",
+            call.id,
+            request.user.id,
+            livekit_identity(request.user),
+            call.room_name,
+            settings.LIVEKIT_URL,
+            len(token),
+        )
 
         return Response(
             {

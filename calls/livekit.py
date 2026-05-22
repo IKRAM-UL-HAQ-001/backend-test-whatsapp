@@ -30,12 +30,16 @@ def user_display_name(user):
     return getattr(user, "name", "") or getattr(user, "phone_number", "") or str(user.id)
 
 
+def livekit_identity(user):
+    return f"user_{user.id}"
+
+
 def generate_join_token(user, call):
     _require_livekit_config()
 
     return (
         livekit_api.AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET)
-        .with_identity(str(user.id))
+        .with_identity(livekit_identity(user))
         .with_name(user_display_name(user))
         .with_grants(
             livekit_api.VideoGrants(room_join=True, room=call.room_name)
@@ -62,3 +66,19 @@ def delete_room(room_name):
     if not room_name:
         return
     async_to_sync(_delete_room_async)(room_name)
+
+
+def is_room_not_found_error(exc):
+    code = getattr(exc, "code", None)
+    status = getattr(exc, "status", None)
+    if callable(code):
+        code = code()
+    if callable(status):
+        status = status()
+
+    message = str(exc).lower()
+    return (
+        str(code).lower() == "not_found"
+        or str(status) == "404"
+        or ("code=not_found" in message and "status=404" in message)
+    )

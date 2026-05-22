@@ -10,6 +10,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
 
 from .models import CallSession
+from .livekit import generate_join_token, livekit_identity
 from .notifications import incoming_call_payload, missed_call_payload, send_incoming_call_push
 
 
@@ -282,6 +283,21 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         delete_room_mock.assert_called_once_with(call.room_name)
 
+    @patch("calls.views.delete_room")
+    def test_livekit_room_not_found_cleanup_is_treated_as_success(self, delete_room_mock):
+        class DummyTwirpNotFound(Exception):
+            code = "not_found"
+            status = 404
+
+        delete_room_mock.side_effect = DummyTwirpNotFound("requested room does not exist")
+        call = self.create_accepted_call()
+        self.authenticate(self.receiver)
+
+        response = self.client.post(f"/api/calls/{call.id}/end/", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], CallSession.Status.ENDED)
+
     def test_non_participant_cannot_view_call(self):
         call = self.create_ringing_call()
         self.authenticate(self.third)
@@ -389,6 +405,70 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.data["code"], "livekit_not_configured")
         self.assertNotIn("LIVEKIT_API_SECRET", response.data)
         self.assertNotIn("test-secret", str(response.data))
+
+    @override_settings(
+        LIVEKIT_URL="wss://livekit.qubrixe.com",
+        LIVEKIT_API_KEY="test-key",
+        LIVEKIT_API_SECRET="test-secret",
+        LIVEKIT_TOKEN_TTL_MINUTES=15,
+    )
+    def test_generate_join_token_uses_expected_livekit_claims(self):
+        class DummyVideoGrants:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class DummyAccessToken:
+            instances = []
+
+            def __init__(self, api_key, api_secret):
+                self.api_key = api_key
+                self.api_secret = api_secret
+                self.identity = None
+                self.name = None
+                self.grants = None
+                self.ttl = None
+                DummyAccessToken.instances.append(self)
+
+            def with_identity(self, identity):
+                self.identity = identity
+                return self
+
+            def with_name(self, name):
+                self.name = name
+                return self
+
+            def with_grants(self, grants):
+                self.grants = grants
+                return self
+
+            def with_ttl(self, ttl):
+                self.ttl = ttl
+                return self
+
+            def to_jwt(self):
+                return "dummy-token"
+
+        class DummyLiveKitApi:
+            AccessToken = DummyAccessToken
+            VideoGrants = DummyVideoGrants
+
+        call = self.create_accepted_call()
+
+        with patch("calls.livekit.livekit_api", DummyLiveKitApi):
+            token = generate_join_token(self.caller, call)
+
+        access_token = DummyAccessToken.instances[0]
+        self.assertEqual(token, "dummy-token")
+        self.assertEqual(access_token.api_key, "test-key")
+        self.assertEqual(access_token.api_secret, "test-secret")
+        self.assertEqual(access_token.identity, f"user_{self.caller.id}")
+        self.assertEqual(access_token.name, self.caller.name)
+        self.assertEqual(access_token.grants.kwargs["room_join"], True)
+        self.assertEqual(access_token.grants.kwargs["room"], call.room_name)
+        self.assertEqual(access_token.ttl.total_seconds(), 900)
+
+    def test_livekit_identity_is_user_prefixed(self):
+        self.assertEqual(livekit_identity(self.caller), f"user_{self.caller.id}")
 
     def assert_call_event(self, layer, index, group, event_name, call):
         sent_group, message = layer.calls[index]
