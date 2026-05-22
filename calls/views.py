@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from .livekit import generate_join_token
+from .livekit import delete_room, generate_join_token
 from .models import CallSession
 from .realtime import send_call_event
 from .serializers import CallSessionSerializer, StartCallSerializer
@@ -32,6 +32,15 @@ ACTIVE_PROGRESS_STATUSES = [
     CallSession.Status.ACTIVE,
 ]
 
+TERMINAL_STATUSES = [
+    CallSession.Status.REJECTED,
+    CallSession.Status.CANCELLED,
+    CallSession.Status.MISSED,
+    CallSession.Status.ENDED,
+    CallSession.Status.FAILED,
+    CallSession.Status.BUSY,
+]
+
 
 def user_call_queryset(user):
     return CallSession.objects.filter(Q(caller=user) | Q(receiver=user))
@@ -42,6 +51,15 @@ def queue_incoming_call_notification(call_id):
         send_incoming_call_notification.delay(call_id)
     except Exception as exc:
         logger.warning("Failed to queue incoming call notification for call_id=%s: %s", call_id, exc)
+
+
+def cleanup_livekit_room(call):
+    try:
+        delete_room(call.room_name)
+    except ImproperlyConfigured as exc:
+        logger.warning("LiveKit room cleanup skipped for call_id=%s: %s", call.id, exc)
+    except Exception as exc:
+        logger.warning("LiveKit room cleanup failed for call_id=%s: %s", call.id, exc)
 
 
 class CallHistoryPagination(LimitOffsetPagination):
@@ -175,6 +193,8 @@ class CallAction(APIView):
                 return response
 
         self.emit_events(request, call)
+        if call.status in TERMINAL_STATUSES:
+            cleanup_livekit_room(call)
         return Response(CallSessionSerializer(call, context={"request": request}).data)
 
     def apply_action(self, request, call):

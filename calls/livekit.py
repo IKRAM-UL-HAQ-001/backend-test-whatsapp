@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
@@ -42,3 +43,22 @@ def generate_join_token(user, call):
         .with_ttl(timedelta(minutes=settings.LIVEKIT_TOKEN_TTL_MINUTES))
         .to_jwt()
     )
+
+
+async def _delete_room_async(room_name):
+    _require_livekit_config()
+    client = livekit_api.LiveKitAPI(
+        settings.LIVEKIT_URL,
+        settings.LIVEKIT_API_KEY,
+        settings.LIVEKIT_API_SECRET,
+    )
+    try:
+        await client.room.delete_room(livekit_api.DeleteRoomRequest(room=room_name))
+    finally:
+        await client.aclose()
+
+
+def delete_room(room_name):
+    if not room_name:
+        return
+    async_to_sync(_delete_room_async)(room_name)

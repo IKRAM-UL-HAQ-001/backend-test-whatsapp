@@ -262,6 +262,26 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.data["status"], CallSession.Status.ENDED)
         self.assertGreaterEqual(response.data["duration_seconds"], 60)
 
+    @patch("calls.views.delete_room")
+    def test_terminal_call_actions_cleanup_livekit_room(self, delete_room_mock):
+        call = self.create_ringing_call()
+        self.authenticate(self.caller)
+
+        cancel_response = self.client.post(f"/api/calls/{call.id}/cancel/", {}, format="json")
+
+        self.assertEqual(cancel_response.status_code, 200)
+        delete_room_mock.assert_called_once_with(call.room_name)
+
+    @patch("calls.views.delete_room")
+    def test_end_call_cleanup_livekit_room(self, delete_room_mock):
+        call = self.create_accepted_call()
+        self.authenticate(self.receiver)
+
+        response = self.client.post(f"/api/calls/{call.id}/end/", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        delete_room_mock.assert_called_once_with(call.room_name)
+
     def test_non_participant_cannot_view_call(self):
         call = self.create_ringing_call()
         self.authenticate(self.third)
