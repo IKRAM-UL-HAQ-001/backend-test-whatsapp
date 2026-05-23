@@ -3,7 +3,7 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -44,6 +44,40 @@ TERMINAL_STATUSES = [
 
 def user_call_queryset(user):
     return CallSession.objects.filter(Q(caller=user) | Q(receiver=user))
+
+
+def current_call_queryset(user):
+    return (
+        user_call_queryset(user)
+        .filter(status__in=ACTIVE_PROGRESS_STATUSES)
+        .select_related("caller", "receiver", "ended_by")
+        .annotate(
+            current_priority=Case(
+                When(status__in=[CallSession.Status.ACCEPTED, CallSession.Status.ACTIVE], then=0),
+                When(status=CallSession.Status.RINGING, then=1),
+                When(status=CallSession.Status.INITIATED, then=2),
+                default=3,
+                output_field=IntegerField(),
+            )
+        )
+        .order_by("current_priority", "-updated_at")
+    )
+
+
+def lock_users(*user_ids):
+    User = get_user_model()
+    return list(
+        User.objects.select_for_update()
+        .filter(id__in=sorted(set(user_ids)))
+        .order_by("id")
+    )
+
+
+def non_terminal_calls_for_users(*users):
+    query = Q()
+    for user in users:
+        query |= Q(caller=user) | Q(receiver=user)
+    return CallSession.objects.select_for_update().filter(query, status__in=ACTIVE_PROGRESS_STATUSES)
 
 
 def queue_incoming_call_notification(call_id):
@@ -95,17 +129,9 @@ class StartCall(APIView):
             logger.warning("Lightweight stale call cleanup failed during start call: %s", exc)
 
         with transaction.atomic():
-            User = get_user_model()
-            list(
-                User.objects.select_for_update()
-                .filter(id__in=sorted([request.user.id, receiver.id]))
-                .order_by("id")
-            )
+            lock_users(request.user.id, receiver.id)
 
-            active_calls = CallSession.objects.select_for_update().filter(
-                Q(caller=request.user) | Q(receiver=request.user) | Q(caller=receiver) | Q(receiver=receiver),
-                status__in=ACTIVE_PROGRESS_STATUSES,
-            )
+            active_calls = non_terminal_calls_for_users(request.user, receiver)
             if active_calls.filter(Q(caller=request.user) | Q(receiver=request.user)).exists():
                 return Response(
                     {"detail": "Caller is busy", "code": "caller_busy"},
@@ -146,6 +172,16 @@ class CallDetail(APIView):
         if request.user.id not in {call.caller_id, call.receiver_id}:
             return Response({"detail": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
         return Response(CallSessionSerializer(call, context={"request": request}).data)
+
+
+class CurrentCall(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        call = current_call_queryset(request.user).first()
+        if call is None:
+            return Response({"call": None})
+        return Response({"call": CallSessionSerializer(call, context={"request": request}).data})
 
 
 class CallHistory(APIView):
@@ -255,6 +291,18 @@ class AcceptCall(CallAction):
             return permission_error
         if call.status != CallSession.Status.RINGING:
             return Response({"detail": "Only ringing calls can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
+        lock_users(call.caller_id, call.receiver_id)
+        conflicts = non_terminal_calls_for_users(call.caller, call.receiver).exclude(id=call.id)
+        if conflicts.filter(Q(caller=call.receiver) | Q(receiver=call.receiver)).exists():
+            return Response(
+                {"detail": "Already in another call", "code": "already_in_call"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if conflicts.filter(Q(caller=call.caller) | Q(receiver=call.caller)).exists():
+            return Response(
+                {"detail": "User is busy", "code": "user_busy"},
+                status=status.HTTP_409_CONFLICT,
+            )
         call.status = CallSession.Status.ACCEPTED
         call.accepted_at = timezone.now()
         call.save(update_fields=["status", "accepted_at", "updated_at"])

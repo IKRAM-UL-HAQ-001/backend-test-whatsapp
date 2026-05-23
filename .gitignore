@@ -1,6 +1,39 @@
-venv
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Django/local runtime
 .env
-service-account.json
+.env.*
+!.env.example
+!.env.*.example
 db.sqlite3
+db.sqlite3-journal
 media/
 staticfiles/
+*.log
+
+# Secrets
+service-account.json
+*.pem
+*.key
+
+# Editors/OS
+.DS_Store
+.idea/
+.vscode/

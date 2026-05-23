@@ -212,6 +212,64 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.data["code"], "caller_busy")
 
+    def test_receiver_with_ringing_call_cannot_start_new_call(self):
+        self.create_ringing_call()
+        self.authenticate(self.receiver)
+
+        response = self.client.post(
+            "/api/calls/start/",
+            {"receiver_id": self.third.id, "call_type": CallSession.CallType.AUDIO},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "caller_busy")
+
+    def test_second_caller_gets_user_busy_for_ringing_receiver(self):
+        self.create_ringing_call()
+        self.authenticate(self.third)
+
+        response = self.client.post(
+            "/api/calls/start/",
+            {"receiver_id": self.receiver.id, "call_type": CallSession.CallType.AUDIO},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "user_busy")
+
+    @patch("calls.views.mark_call_missed_if_unanswered.apply_async")
+    @patch("calls.views.send_incoming_call_notification.delay")
+    @patch("calls.realtime.get_channel_layer")
+    def test_opposite_direction_simultaneous_call_returns_busy(
+        self,
+        channel_layer_mock,
+        delay_mock,
+        apply_async_mock,
+    ):
+        channel_layer_mock.return_value = DummyChannelLayer()
+        first = self.start_call()
+        self.authenticate(self.receiver)
+
+        second = self.client.post(
+            "/api/calls/start/",
+            {"receiver_id": self.caller.id, "call_type": CallSession.CallType.AUDIO},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data["code"], "caller_busy")
+        self.assertEqual(
+            CallSession.objects.filter(status__in=[
+                CallSession.Status.INITIATED,
+                CallSession.Status.RINGING,
+                CallSession.Status.ACCEPTED,
+                CallSession.Status.ACTIVE,
+            ]).count(),
+            1,
+        )
+
     def test_receiver_accepts_call(self):
         call = self.create_ringing_call()
         self.authenticate(self.receiver)
@@ -221,6 +279,25 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], CallSession.Status.ACCEPTED)
         self.assertIsNotNone(response.data["accepted_at"])
+
+    def test_accept_fails_if_receiver_already_active_elsewhere(self):
+        call = self.create_ringing_call()
+        CallSession.objects.create(
+            caller=self.receiver,
+            receiver=self.third,
+            call_type=CallSession.CallType.AUDIO,
+            status=CallSession.Status.ACCEPTED,
+            room_name="receiver-already-active-room",
+            accepted_at=timezone.now(),
+        )
+        self.authenticate(self.receiver)
+
+        response = self.client.post(f"/api/calls/{call.id}/accept/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "already_in_call")
+        call.refresh_from_db()
+        self.assertEqual(call.status, CallSession.Status.RINGING)
 
     def test_non_receiver_cannot_accept(self):
         call = self.create_ringing_call()
@@ -322,6 +399,32 @@ class CallSessionApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["id"] for item in response.data["results"]], [own_call.id])
+
+    def test_current_call_returns_none_when_idle(self):
+        self.authenticate(self.caller)
+
+        response = self.client.get("/api/calls/current/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["call"])
+
+    def test_current_call_prefers_accepted_over_ringing(self):
+        ringing = self.create_ringing_call()
+        accepted = CallSession.objects.create(
+            caller=self.caller,
+            receiver=self.third,
+            call_type=CallSession.CallType.AUDIO,
+            status=CallSession.Status.ACCEPTED,
+            room_name="current-accepted-room",
+            accepted_at=timezone.now(),
+        )
+        self.authenticate(self.caller)
+
+        response = self.client.get("/api/calls/current/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["call"]["id"], accepted.id)
+        self.assertNotEqual(response.data["call"]["id"], ringing.id)
 
     @override_settings(
         LIVEKIT_URL="wss://livekit.qubrixe.com",
