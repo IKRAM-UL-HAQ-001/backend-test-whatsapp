@@ -269,15 +269,29 @@ class ListUsers(APIView):
                     contact_names.setdefault(phone_number, contact_name)
         else:
             saved_contacts = UserContact.objects.filter(user=request.user).only("phone_number", "contact_name")
-            contact_names = {contact.phone_number: contact.contact_name for contact in saved_contacts}
+            contact_names = {}
+            for contact in saved_contacts:
+                phone_number = normalize_contact_phone(contact.phone_number, settings.CONTACT_DEFAULT_COUNTRY_CODE)
+                if phone_number:
+                    contact_names.setdefault(phone_number, contact.contact_name)
 
         if not contact_names:
             return Response([])
 
+        logger.info(
+            "Contact list lookup user_id=%s unique_numbers=%s",
+            request.user.id,
+            len(contact_names),
+        )
         users = (
             User.objects.filter(phone_number__in=contact_names.keys())
             .exclude(id=request.user.id)
             .only("id", "phone_number", "name", "about", "profile_picture")
+        )
+        logger.info(
+            "Contact list lookup completed user_id=%s matches=%s",
+            request.user.id,
+            users.count(),
         )
         return Response(
             [
@@ -449,6 +463,11 @@ class SyncContacts(APIView):
             if not phone_number or phone_number == request.user.phone_number:
                 continue
             normalized_contacts.setdefault(phone_number, contact_name)
+        logger.info(
+            "Contact sync started user_id=%s unique_numbers=%s",
+            request.user.id,
+            len(normalized_contacts),
+        )
 
         if not normalized_contacts:
             cache.delete(lock_key)
@@ -460,11 +479,9 @@ class SyncContacts(APIView):
                 for user in User.objects.filter(phone_number__in=normalized_contacts.keys())
             }
             existing_contacts = {
-                contact.phone_number: contact
-                for contact in UserContact.objects.filter(
-                    user=request.user,
-                    phone_number__in=normalized_contacts.keys(),
-                )
+                normalize_contact_phone(contact.phone_number, settings.CONTACT_DEFAULT_COUNTRY_CODE): contact
+                for contact in UserContact.objects.filter(user=request.user)
+                if normalize_contact_phone(contact.phone_number, settings.CONTACT_DEFAULT_COUNTRY_CODE)
             }
 
             to_create = []
@@ -487,6 +504,9 @@ class SyncContacts(APIView):
                     continue
 
                 changed = False
+                if existing.phone_number != phone_number:
+                    existing.phone_number = phone_number
+                    changed = True
                 if existing.contact_name != contact_name:
                     existing.contact_name = contact_name
                     changed = True
@@ -502,10 +522,18 @@ class SyncContacts(APIView):
                 if to_update:
                     UserContact.objects.bulk_update(
                         to_update,
-                        ["contact_name", "contact"],
+                        ["phone_number", "contact_name", "contact"],
                         batch_size=500,
                     )
-            return Response({"synced": len(to_create) + len(to_update)})
+            synced_count = len(to_create) + len(to_update)
+            logger.info(
+                "Contact sync completed user_id=%s created=%s updated=%s matches=%s",
+                request.user.id,
+                len(to_create),
+                len(to_update),
+                len(users_by_phone),
+            )
+            return Response({"synced": synced_count})
         finally:
             cache.delete(lock_key)
 

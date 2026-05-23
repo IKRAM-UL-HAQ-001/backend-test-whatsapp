@@ -1,7 +1,8 @@
 from django.test import override_settings
 from rest_framework.test import APIClient, APITestCase
 
-from users.models import DeviceLinkToken, OTP, User
+from users.models import DeviceLinkToken, OTP, User, UserContact
+from users.validation import normalize_contact_phone
 
 
 class AuthFlowTests(APITestCase):
@@ -97,3 +98,96 @@ class AccountAndLinkingTests(APITestCase):
         self.assertIsNotNone(token_obj.consumed_at)
         second = self.client.get("/auth/check-link-status/token-1/")
         self.assertEqual(second.status_code, 400)
+
+
+@override_settings(
+    CACHES={
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "contact-sync-tests",
+        }
+    }
+)
+class ContactSyncTests(APITestCase):
+    def setUp(self):
+        self.owner = User.all_objects.create(
+            country_code="+92",
+            phone_number="+923009999999",
+            name="Owner",
+            is_verified=True,
+        )
+        self.contact_user = User.all_objects.create(
+            country_code="+92",
+            phone_number="+923001234567",
+            name="Ali",
+            is_verified=True,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.owner)
+
+    def test_normalize_contact_phone_handles_pakistan_mobile_formats(self):
+        cases = [
+            "+923001234567",
+            "03001234567",
+            "3001234567",
+            "923001234567",
+            "+92 (300) 123-4567",
+        ]
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertEqual(normalize_contact_phone(value), "+923001234567")
+
+    def test_list_users_matches_submitted_contact_formats(self):
+        for value in ["+923001234567", "03001234567", "3001234567", "923001234567"]:
+            with self.subTest(value=value):
+                response = self.client.post(
+                    "/auth/list-users/",
+                    {"contacts": [{"phone_number": value, "name": "Ali Local"}]},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(len(response.data), 1)
+                self.assertEqual(response.data[0]["id"], str(self.contact_user.id))
+                self.assertEqual(response.data[0]["phone"], "+923001234567")
+
+    def test_sync_contacts_collapses_duplicate_formats(self):
+        response = self.client.post(
+            "/auth/sync-contacts/",
+            {
+                "contacts": [
+                    {"phone_number": "03001234567", "name": "Ali"},
+                    {"phone_number": "3001234567", "name": "Ali Duplicate"},
+                    {"phone_number": "+92 300 1234567", "name": "Ali Plus"},
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        contacts = UserContact.objects.filter(user=self.owner, phone_number="+923001234567")
+        self.assertEqual(contacts.count(), 1)
+        self.assertEqual(contacts.first().contact_id, self.contact_user.id)
+
+    def test_newly_created_user_appears_in_list_users_immediately(self):
+        self.contact_user.delete()
+        first = self.client.post(
+            "/auth/list-users/",
+            {"contacts": [{"phone_number": "03001234567", "name": "Ali"}]},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(len(first.data), 0)
+
+        new_user = User.all_objects.create(
+            country_code="+92",
+            phone_number="+923001234567",
+            name="Ali",
+            is_verified=True,
+        )
+        second = self.client.post(
+            "/auth/list-users/",
+            {"contacts": [{"phone_number": "3001234567", "name": "Ali"}]},
+            format="json",
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(len(second.data), 1)
+        self.assertEqual(second.data[0]["id"], str(new_user.id))
