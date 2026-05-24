@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.core.files.base import ContentFile
 from django.http import FileResponse
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Case, Count, F, OuterRef, Q, Subquery, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -63,8 +64,26 @@ def broadcast_socket_event(user_id, event_name, payload):
 
 
 def queue_push_notification(message_id, receiver_id):
+    queued_at = timezone.now()
+    logger.info(
+        "push_task_queued kind=message message_id=%s receiver_id=%s queued_at=%s queue=push_notifications",
+        message_id,
+        receiver_id,
+        queued_at.isoformat(),
+    )
+
+    def enqueue():
+        try:
+            send_message_notification.apply_async(
+                (message_id, receiver_id),
+                queue="push_notifications",
+                priority=5,
+            )
+        except Exception as exc:
+            logger.warning("Failed to queue push notification for user_id=%s: %s", receiver_id, exc)
+
     try:
-        send_message_notification.delay(message_id, receiver_id)
+        transaction.on_commit(enqueue)
     except Exception as exc:
         logger.warning("Failed to queue push notification for user_id=%s: %s", receiver_id, exc)
 
@@ -262,6 +281,14 @@ class SendMessage(APIView):
             duration=data.get("duration"),
             thumbnail=thumbnail,
             status=MessageStatus.SENT,
+        )
+        logger.info(
+            "message_created message_id=%s chat_id=%s sender_id=%s receiver_id=%s created_at=%s",
+            msg.id,
+            chat.id,
+            request.user.id,
+            receiver.id,
+            msg.created_at.isoformat(),
         )
         chat.last_activity = msg.created_at
         chat.save(update_fields=["last_activity"])

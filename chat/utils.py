@@ -5,6 +5,7 @@ from typing import Optional
 import firebase_admin
 from firebase_admin import credentials, messaging
 from django.core.files.base import ContentFile
+from django.utils import timezone
 
 from django.conf import settings
 
@@ -63,9 +64,19 @@ def get_firebase_app() -> Optional[firebase_admin.App]:
 
 def send_push_notification(receiver, title, message, data=None):
     if not receiver.fcm_token:
+        logger.info(
+            "fcm_token_missing kind=generic recipient_id=%s at=%s",
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return False
 
     if get_firebase_app() is None:
+        logger.warning(
+            "firebase_send_skipped kind=generic recipient_id=%s reason=not_configured at=%s",
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return False
 
     msg_data = {
@@ -84,8 +95,22 @@ def send_push_notification(receiver, title, message, data=None):
     )
 
     try:
+        logger.info(
+            "firebase_send_called kind=generic recipient_id=%s at=%s",
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         messaging.send(fcm_message)
+        logger.info(
+            "firebase_send_success kind=generic recipient_id=%s at=%s",
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return True
     except Exception:
-        logger.exception("FCM send failed for user_id=%s", receiver.id)
+        logger.exception(
+            "firebase_send_failed kind=generic recipient_id=%s at=%s",
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return False

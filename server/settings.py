@@ -6,6 +6,7 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 import firebase_admin
 from firebase_admin import credentials
+from kombu import Queue
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -120,6 +121,30 @@ REDIS_URL = env("REDIS_URL", "redis://localhost:6379/0")
 # Optional overrides; in production these must remain Redis URLs.
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL)
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_QUEUES = (
+    Queue("default"),
+    Queue("push_notifications"),
+    Queue("call_notifications"),
+)
+CELERY_TASK_ROUTES = {
+    "chat.tasks.send_message_notification": {
+        "queue": "push_notifications",
+        "priority": 5,
+    },
+    "chat.tasks.send_push_notification_task": {
+        "queue": "push_notifications",
+        "priority": 5,
+    },
+    "calls.tasks.send_incoming_call_notification": {
+        "queue": "call_notifications",
+        "priority": 9,
+    },
+    "calls.tasks.send_missed_call_notification": {
+        "queue": "push_notifications",
+        "priority": 5,
+    },
+}
 
 if not DEBUG and not REDIS_URL:
     raise ImproperlyConfigured(

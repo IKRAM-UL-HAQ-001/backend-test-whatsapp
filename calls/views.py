@@ -81,8 +81,25 @@ def non_terminal_calls_for_users(*users):
 
 
 def queue_incoming_call_notification(call_id):
+    queued_at = timezone.now()
+    logger.info(
+        "push_task_queued kind=incoming_call call_id=%s queued_at=%s queue=call_notifications",
+        call_id,
+        queued_at.isoformat(),
+    )
+
+    def enqueue():
+        try:
+            send_incoming_call_notification.apply_async(
+                (call_id,),
+                queue="call_notifications",
+                priority=9,
+            )
+        except Exception as exc:
+            logger.warning("Failed to queue incoming call notification for call_id=%s: %s", call_id, exc)
+
     try:
-        send_incoming_call_notification.delay(call_id)
+        transaction.on_commit(enqueue)
     except Exception as exc:
         logger.warning("Failed to queue incoming call notification for call_id=%s: %s", call_id, exc)
 
@@ -153,6 +170,13 @@ class StartCall(APIView):
             )
             call.room_name = f"call_{call.id}"
             call.save(update_fields=["room_name", "updated_at"])
+            logger.info(
+                "call_created call_id=%s caller_id=%s receiver_id=%s created_at=%s",
+                call.id,
+                request.user.id,
+                receiver.id,
+                call.created_at.isoformat(),
+            )
 
         send_call_event(receiver.id, "call_invite", call)
         send_call_event(request.user.id, "call_ringing", call)

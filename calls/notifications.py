@@ -1,6 +1,8 @@
 import logging
+from datetime import timedelta
 
 from firebase_admin import messaging
+from django.utils import timezone
 
 from chat.utils import get_firebase_app
 
@@ -57,16 +59,36 @@ def _clear_invalid_token(user):
 
 
 def send_call_push_notification(receiver, title, body, data):
+    call_id = data.get("call_id")
+    kind = data.get("type", "call")
     if not receiver.fcm_token:
+        logger.info(
+            "fcm_token_missing kind=%s call_id=%s recipient_id=%s at=%s",
+            kind,
+            call_id,
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return "No FCM token for recipient"
 
     if get_firebase_app() is None:
+        logger.warning(
+            "firebase_send_skipped kind=%s call_id=%s recipient_id=%s reason=not_configured at=%s",
+            kind,
+            call_id,
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return "Firebase is not configured"
 
     fcm_message = messaging.Message(
         data={str(key): str(value) for key, value in data.items()},
-        android=messaging.AndroidConfig(priority="high"),
+        android=messaging.AndroidConfig(
+            priority="high",
+            ttl=timedelta(seconds=30) if kind == "incoming_call" else timedelta(minutes=5),
+        ),
         apns=messaging.APNSConfig(
+            headers={"apns-priority": "10"},
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(
                     alert=messaging.ApsAlert(title=title, body=body),
@@ -79,13 +101,41 @@ def send_call_push_notification(receiver, title, body, data):
     )
 
     try:
+        logger.info(
+            "firebase_send_called kind=%s call_id=%s recipient_id=%s at=%s",
+            kind,
+            call_id,
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         messaging.send(fcm_message)
+        logger.info(
+            "firebase_send_success kind=%s call_id=%s recipient_id=%s at=%s",
+            kind,
+            call_id,
+            receiver.id,
+            timezone.now().isoformat(),
+        )
         return "Notification sent"
     except Exception as exc:
         if _is_invalid_token_error(exc):
             _clear_invalid_token(receiver)
-            logger.warning("Cleared invalid FCM token for user_id=%s", receiver.id)
+            logger.warning(
+                "fcm_token_invalid kind=%s call_id=%s recipient_id=%s cleared_at=%s",
+                kind,
+                call_id,
+                receiver.id,
+                timezone.now().isoformat(),
+            )
             return "Invalid FCM token cleared"
+        logger.warning(
+            "firebase_send_failed kind=%s call_id=%s recipient_id=%s at=%s error=%s",
+            kind,
+            call_id,
+            receiver.id,
+            timezone.now().isoformat(),
+            exc,
+        )
         raise
 
 

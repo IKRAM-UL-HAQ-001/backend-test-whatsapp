@@ -38,43 +38,45 @@ class ChatApiTests(APITestCase):
         )
 
     @patch("chat.views.get_channel_layer")
-    @patch("chat.tasks.send_message_notification.delay")
+    @patch("chat.views.send_message_notification.apply_async")
     def test_send_message_creates_status_and_broadcasts(self, push_mock, channel_layer_mock):
         dummy_channel_layer = DummyChannelLayer()
         channel_layer_mock.return_value = dummy_channel_layer
         client = APIClient()
         client.force_authenticate(user=self.sender)
-        response = client.post(
-            "/api/send/",
-            {
-                "receiver_id": self.receiver.id,
-                "encrypted_text": "hello world",
-                "message_type": "text",
-                "client_uuid": "11111111-1111-1111-1111-111111111111",
-            },
-            format="multipart",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = client.post(
+                "/api/send/",
+                {
+                    "receiver_id": self.receiver.id,
+                    "encrypted_text": "hello world",
+                    "message_type": "text",
+                    "client_uuid": "11111111-1111-1111-1111-111111111111",
+                },
+                format="multipart",
+            )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Chat.objects.count(), 1)
         self.assertEqual(len(dummy_channel_layer.calls), 2)
         push_mock.assert_called_once()
 
     @patch("chat.views.get_channel_layer")
-    @patch("chat.tasks.send_message_notification.delay", side_effect=Exception("broker down"))
+    @patch("chat.views.send_message_notification.apply_async", side_effect=Exception("broker down"))
     def test_send_message_succeeds_when_push_queue_is_unavailable(self, push_mock, channel_layer_mock):
         channel_layer_mock.return_value = DummyChannelLayer()
         client = APIClient()
         client.force_authenticate(user=self.sender)
-        response = client.post(
-            "/api/send/",
-            {
-                "receiver_id": self.receiver.id,
-                "encrypted_text": "hello while broker is down",
-                "message_type": "text",
-                "client_uuid": "22222222-2222-4222-8222-222222222222",
-            },
-            format="multipart",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = client.post(
+                "/api/send/",
+                {
+                    "receiver_id": self.receiver.id,
+                    "encrypted_text": "hello while broker is down",
+                    "message_type": "text",
+                    "client_uuid": "22222222-2222-4222-8222-222222222222",
+                },
+                format="multipart",
+            )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Message.objects.count(), 1)
         push_mock.assert_called_once()

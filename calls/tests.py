@@ -135,13 +135,22 @@ class CallSessionApiTests(APITestCase):
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
 
-    def start_call(self, call_type=CallSession.CallType.AUDIO):
+    def start_call(self, call_type=CallSession.CallType.AUDIO, queue_tasks=False):
         self.authenticate(self.caller)
-        return self.client.post(
-            "/api/calls/start/",
-            {"receiver_id": self.receiver.id, "call_type": call_type},
-            format="json",
-        )
+        if queue_tasks:
+            return self.client.post(
+                "/api/calls/start/",
+                {"receiver_id": self.receiver.id, "call_type": call_type},
+                format="json",
+            )
+        with patch("calls.views.queue_incoming_call_notification"), patch(
+            "calls.views.queue_missed_call_timeout"
+        ):
+            return self.client.post(
+                "/api/calls/start/",
+                {"receiver_id": self.receiver.id, "call_type": call_type},
+                format="json",
+            )
 
     def create_ringing_call(self):
         return CallSession.objects.create(
@@ -239,7 +248,7 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.data["code"], "user_busy")
 
     @patch("calls.views.mark_call_missed_if_unanswered.apply_async")
-    @patch("calls.views.send_incoming_call_notification.delay")
+    @patch("calls.views.send_incoming_call_notification.apply_async")
     @patch("calls.realtime.get_channel_layer")
     def test_opposite_direction_simultaneous_call_returns_busy(
         self,
@@ -318,7 +327,8 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.data["ended_by"]["id"], str(self.receiver.id))
         self.assertIsNotNone(response.data["ended_at"])
 
-    def test_caller_cancels_ringing_call(self):
+    @patch("calls.views.cleanup_livekit_room")
+    def test_caller_cancels_ringing_call(self, cleanup_mock):
         call = self.create_ringing_call()
         self.authenticate(self.caller)
 
@@ -327,6 +337,7 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], CallSession.Status.CANCELLED)
         self.assertEqual(response.data["ended_by"]["id"], str(self.caller.id))
+        cleanup_mock.assert_called_once()
 
     def test_participant_ends_accepted_call(self):
         call = self.create_ringing_call()
@@ -598,22 +609,44 @@ class CallSessionApiTests(APITestCase):
         self.assert_call_event(layer, 0, f"user_{self.receiver.id}", "call_invite", call)
         self.assert_call_event(layer, 1, f"user_{self.caller.id}", "call_ringing", call)
 
-    @patch("calls.views.send_incoming_call_notification.delay")
-    def test_start_call_triggers_incoming_call_push_task(self, delay_mock):
-        response = self.start_call()
+    @patch("calls.views.mark_call_missed_if_unanswered.apply_async")
+    @patch("calls.views.send_incoming_call_notification.apply_async")
+    @patch("calls.views.send_call_event")
+    def test_start_call_triggers_incoming_call_push_task(
+        self,
+        event_mock,
+        delay_mock,
+        missed_timeout_mock,
+    ):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.start_call(queue_tasks=True)
 
         self.assertEqual(response.status_code, 201)
-        delay_mock.assert_called_once_with(response.data["id"])
+        delay_mock.assert_called_once_with(
+            (response.data["id"],),
+            queue="call_notifications",
+            priority=9,
+        )
+        missed_timeout_mock.assert_called_once()
 
     @override_settings(CALL_RING_TIMEOUT_SECONDS=60)
+    @patch("calls.views.send_incoming_call_notification.apply_async")
     @patch("calls.views.mark_call_missed_if_unanswered.apply_async")
-    def test_start_call_schedules_missed_call_timeout(self, apply_async_mock):
-        response = self.start_call()
+    @patch("calls.views.send_call_event")
+    def test_start_call_schedules_missed_call_timeout(
+        self,
+        event_mock,
+        apply_async_mock,
+        incoming_push_mock,
+    ):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.start_call(queue_tasks=True)
 
         self.assertEqual(response.status_code, 201)
         apply_async_mock.assert_called_once_with((response.data["id"],), countdown=60)
+        incoming_push_mock.assert_called_once()
 
-    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_missed_call_notification.apply_async")
     @patch("calls.tasks.send_call_event")
     def test_ringing_call_becomes_missed_after_timeout_task(self, event_mock, delay_mock):
         call = self.create_ringing_call()
@@ -628,9 +661,13 @@ class CallSessionApiTests(APITestCase):
         self.assertIsNone(call.ended_by)
         event_mock.assert_any_call(self.caller.id, "call_missed", call)
         event_mock.assert_any_call(self.receiver.id, "call_missed", call)
-        delay_mock.assert_called_once_with(call.id)
+        delay_mock.assert_called_once_with(
+            (call.id,),
+            queue="push_notifications",
+            priority=5,
+        )
 
-    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_missed_call_notification.apply_async")
     @patch("calls.tasks.send_call_event")
     def test_accepted_call_is_not_marked_missed(self, event_mock, delay_mock):
         call = self.create_accepted_call()
@@ -643,7 +680,7 @@ class CallSessionApiTests(APITestCase):
         event_mock.assert_not_called()
         delay_mock.assert_not_called()
 
-    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_missed_call_notification.apply_async")
     @patch("calls.tasks.send_call_event")
     def test_rejected_call_is_not_marked_missed(self, event_mock, delay_mock):
         call = self.create_ringing_call()
@@ -661,7 +698,7 @@ class CallSessionApiTests(APITestCase):
         event_mock.assert_not_called()
         delay_mock.assert_not_called()
 
-    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_missed_call_notification.apply_async")
     @patch("calls.tasks.send_call_event")
     def test_cancelled_call_is_not_marked_missed(self, event_mock, delay_mock):
         call = self.create_ringing_call()
@@ -679,7 +716,7 @@ class CallSessionApiTests(APITestCase):
         event_mock.assert_not_called()
         delay_mock.assert_not_called()
 
-    @patch("calls.tasks.send_missed_call_notification.delay")
+    @patch("calls.tasks.send_missed_call_notification.apply_async")
     @patch("calls.realtime.get_channel_layer")
     def test_missed_event_is_emitted(self, channel_layer_mock, delay_mock):
         layer = DummyChannelLayer()
@@ -692,7 +729,11 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(len(layer.calls), 2)
         self.assert_call_event(layer, 0, f"user_{self.caller.id}", "call_missed", call)
         self.assert_call_event(layer, 1, f"user_{self.receiver.id}", "call_missed", call)
-        delay_mock.assert_called_once_with(call.id)
+        delay_mock.assert_called_once_with(
+            (call.id,),
+            queue="push_notifications",
+            priority=5,
+        )
 
     @patch("calls.realtime.get_channel_layer")
     def test_accept_call_sends_call_accepted_to_caller_group(self, channel_layer_mock):

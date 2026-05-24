@@ -16,6 +16,12 @@ def send_incoming_call_notification(self, call_id):
     try:
         from .models import CallSession
 
+        logger.info(
+            "push_task_started kind=incoming_call call_id=%s started_at=%s task_id=%s",
+            call_id,
+            timezone.now().isoformat(),
+            getattr(self.request, "id", None),
+        )
         call = (
             CallSession.objects.select_related("caller", "receiver")
             .filter(id=call_id)
@@ -33,6 +39,12 @@ def send_missed_call_notification(self, call_id):
     try:
         from .models import CallSession
 
+        logger.info(
+            "push_task_started kind=missed_call call_id=%s started_at=%s task_id=%s",
+            call_id,
+            timezone.now().isoformat(),
+            getattr(self.request, "id", None),
+        )
         call = (
             CallSession.objects.select_related("caller", "receiver")
             .filter(id=call_id)
@@ -73,7 +85,16 @@ def mark_call_missed_if_unanswered(call_id):
     except Exception as exc:
         logger.warning("Failed to emit missed call event for call_id=%s: %s", call.id, exc)
     try:
-        send_missed_call_notification.delay(call.id)
+        logger.info(
+            "push_task_queued kind=missed_call call_id=%s queued_at=%s queue=push_notifications",
+            call.id,
+            timezone.now().isoformat(),
+        )
+        send_missed_call_notification.apply_async(
+            (call.id,),
+            queue="push_notifications",
+            priority=5,
+        )
     except Exception as exc:
         logger.warning("Failed to queue missed call notification for call_id=%s: %s", call.id, exc)
         return "Call marked missed; missed push queue failed"
