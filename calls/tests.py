@@ -624,7 +624,7 @@ class CallSessionApiTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         delay_mock.assert_called_once_with(
             (response.data["id"],),
-            queue="call_notifications",
+            queue="default",
             priority=9,
         )
         missed_timeout_mock.assert_called_once()
@@ -663,7 +663,7 @@ class CallSessionApiTests(APITestCase):
         event_mock.assert_any_call(self.receiver.id, "call_missed", call)
         delay_mock.assert_called_once_with(
             (call.id,),
-            queue="push_notifications",
+            queue="default",
             priority=5,
         )
 
@@ -731,7 +731,7 @@ class CallSessionApiTests(APITestCase):
         self.assert_call_event(layer, 1, f"user_{self.receiver.id}", "call_missed", call)
         delay_mock.assert_called_once_with(
             (call.id,),
-            queue="push_notifications",
+            queue="default",
             priority=5,
         )
 

@@ -83,7 +83,7 @@ def non_terminal_calls_for_users(*users):
 def queue_incoming_call_notification(call_id):
     queued_at = timezone.now()
     logger.info(
-        "push_task_queued kind=incoming_call call_id=%s queued_at=%s queue=call_notifications",
+        "push_task_queued kind=incoming_call call_id=%s queued_at=%s queue=default",
         call_id,
         queued_at.isoformat(),
     )
@@ -92,7 +92,7 @@ def queue_incoming_call_notification(call_id):
         try:
             send_incoming_call_notification.apply_async(
                 (call_id,),
-                queue="call_notifications",
+                queue="default",
                 priority=9,
             )
         except Exception as exc:

@@ -66,7 +66,7 @@ def broadcast_socket_event(user_id, event_name, payload):
 def queue_push_notification(message_id, receiver_id):
     queued_at = timezone.now()
     logger.info(
-        "push_task_queued kind=message message_id=%s receiver_id=%s queued_at=%s queue=push_notifications",
+        "push_task_queued kind=message message_id=%s receiver_id=%s queued_at=%s queue=default",
         message_id,
         receiver_id,
         queued_at.isoformat(),
@@ -76,7 +76,7 @@ def queue_push_notification(message_id, receiver_id):
         try:
             send_message_notification.apply_async(
                 (message_id, receiver_id),
-                queue="push_notifications",
+                queue="default",
                 priority=5,
             )
         except Exception as exc:

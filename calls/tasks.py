@@ -86,13 +86,13 @@ def mark_call_missed_if_unanswered(call_id):
         logger.warning("Failed to emit missed call event for call_id=%s: %s", call.id, exc)
     try:
         logger.info(
-            "push_task_queued kind=missed_call call_id=%s queued_at=%s queue=push_notifications",
+            "push_task_queued kind=missed_call call_id=%s queued_at=%s queue=default",
             call.id,
             timezone.now().isoformat(),
         )
         send_missed_call_notification.apply_async(
             (call.id,),
-            queue="push_notifications",
+            queue="default",
             priority=5,
         )
     except Exception as exc:

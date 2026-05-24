@@ -129,22 +129,23 @@ CELERY_TASK_QUEUES = (
 )
 CELERY_TASK_ROUTES = {
     "chat.tasks.send_message_notification": {
-        "queue": "push_notifications",
+        "queue": "default",
         "priority": 5,
     },
     "chat.tasks.send_push_notification_task": {
-        "queue": "push_notifications",
+        "queue": "default",
         "priority": 5,
     },
     "calls.tasks.send_incoming_call_notification": {
-        "queue": "call_notifications",
+        "queue": "default",
         "priority": 9,
     },
     "calls.tasks.send_missed_call_notification": {
-        "queue": "push_notifications",
+        "queue": "default",
         "priority": 5,
     },
 }
+
 
 if not DEBUG and not REDIS_URL:
     raise ImproperlyConfigured(
