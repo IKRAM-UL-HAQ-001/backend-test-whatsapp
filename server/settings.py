@@ -209,6 +209,12 @@ if USE_S3:
             "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
             "OPTIONS": {
                 "location": AWS_LOCATION,
+                # Generate presigned URLs against the bucket's regional
+                # endpoint. The global S3 endpoint redirects this bucket to
+                # ap-south-1, and that host change invalidates SigV4 URLs.
+                "region_name": AWS_S3_REGION_NAME,
+                "endpoint_url": f"https://s3.{AWS_S3_REGION_NAME}.amazonaws.com",
+                "addressing_style": "virtual",
                 "file_overwrite": config("AWS_S3_FILE_OVERWRITE", default=False, cast=bool),
                 "default_acl": aws_default_acl,
                 "querystring_auth": config("AWS_QUERYSTRING_AUTH", default=True, cast=bool),
