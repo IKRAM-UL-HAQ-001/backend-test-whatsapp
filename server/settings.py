@@ -200,13 +200,17 @@ if USE_S3:
     AWS_LOCATION = "media"
 
     # django-storages S3 configuration. No AWS keys here - uses EC2 IAM Role.
+    aws_default_acl = config("AWS_DEFAULT_ACL", default=None)
+    if aws_default_acl in ("None", "", None):
+        aws_default_acl = None
+
     STORAGES = {
         "default": {
             "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
             "OPTIONS": {
                 "location": AWS_LOCATION,
                 "file_overwrite": config("AWS_S3_FILE_OVERWRITE", default=False, cast=bool),
-                "default_acl": config("AWS_DEFAULT_ACL", default=None),
+                "default_acl": aws_default_acl,
                 "querystring_auth": config("AWS_QUERYSTRING_AUTH", default=True, cast=bool),
             },
         },
