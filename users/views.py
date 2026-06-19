@@ -32,6 +32,18 @@ from .validation import normalize_contact_phone, normalize_phone
 logger = logging.getLogger(__name__)
 
 
+def _profile_data(user, request):
+    return {
+        "id": user.id,
+        "phone_number": user.phone_number,
+        "name": user.name,
+        "about": user.about,
+        "profile_picture": request.build_absolute_uri(user.profile_picture.url)
+        if user.profile_picture and hasattr(user.profile_picture, "url")
+        else None,
+    }
+
+
 def _send_otp_sms(phone_number, otp_code):
     return "000000"
 
@@ -41,15 +53,7 @@ def _issue_tokens(user, request):
     return {
         "refresh": str(refresh),
         "access": str(refresh.access_token),
-        "user": {
-            "id": user.id,
-            "phone_number": user.phone_number,
-            "name": user.name,
-            "about": user.about,
-            "profile_picture": request.build_absolute_uri(user.profile_picture.url)
-            if user.profile_picture and hasattr(user.profile_picture, "url")
-            else None,
-        },
+        "user": _profile_data(user, request),
     }
 
 
@@ -213,20 +217,28 @@ class VerifyOTP(APIView):
 
 class CompleteProfile(APIView):
     """
-    POST /auth/complete-profile/
+    GET/POST /auth/complete-profile/
     Auth: bearer
     Request: multipart/json with name/profile_picture/fcm_token
-    Response: {"message": "Profile updated"}
+    Response: current updated profile, including a fresh media URL
     Errors: 400 validation
     """
 
     permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        return Response({"user": _profile_data(request.user, request)})
+
     def post(self, request):
         serializer = CompleteProfileSerializer(instance=request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response({"message": "Profile updated"})
+        user = serializer.save()
+        return Response(
+            {
+                "message": "Profile updated",
+                "user": _profile_data(user, request),
+            }
+        )
 
 
 class UpdateFcmToken(APIView):

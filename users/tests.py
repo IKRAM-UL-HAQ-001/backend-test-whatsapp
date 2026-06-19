@@ -83,6 +83,26 @@ class AccountAndLinkingTests(APITestCase):
         self.assertTrue(self.user.is_deleted)
         self.assertIsNotNone(self.user.deleted_at)
 
+    def test_profile_can_be_read_and_picture_removed(self):
+        self.user.profile_picture.name = "profiles/avatar.jpg"
+        self.user.save(update_fields=["profile_picture"])
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+
+        profile_response = client.get("/auth/complete-profile/")
+        self.assertEqual(profile_response.status_code, 200)
+        self.assertIn("profiles/avatar.jpg", profile_response.data["user"]["profile_picture"])
+
+        remove_response = client.post(
+            "/auth/complete-profile/",
+            {"remove_profile_picture": True},
+            format="json",
+        )
+        self.assertEqual(remove_response.status_code, 200)
+        self.assertIsNone(remove_response.data["user"]["profile_picture"])
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.profile_picture)
+
     @override_settings(LINK_STATUS_POLL_SECONDS=0)
     def test_device_link_token_consumed_on_first_success(self):
         token_obj = DeviceLinkToken.objects.create(
