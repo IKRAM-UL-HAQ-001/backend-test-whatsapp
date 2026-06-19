@@ -288,12 +288,11 @@ FIREBASE_CLIENT_EMAIL = config("FIREBASE_CLIENT_EMAIL", default="")
 FIREBASE_PRIVATE_KEY = config("FIREBASE_PRIVATE_KEY", default="").replace("\\n", "\n")
 FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="service-account.json")
 
-# LiveKit token generation. Production should set these from the self-hosted
-# LiveKit server config; never expose LIVEKIT_API_SECRET to clients.
-LIVEKIT_API_KEY = config("LIVEKIT_API_KEY", default="")
-LIVEKIT_API_SECRET = config("LIVEKIT_API_SECRET", default="")
-LIVEKIT_URL = config("LIVEKIT_URL", default="")
-LIVEKIT_TOKEN_TTL_MINUTES = config("LIVEKIT_TOKEN_TTL_MINUTES", default=15, cast=int)
+# AWS/Chime calling settings
+CHIME_ENABLED = config("CHIME_ENABLED", default=True, cast=bool)
+AWS_REGION = config("AWS_REGION", default="ap-south-1")
+CHIME_MEDIA_REGION = config("CHIME_MEDIA_REGION", default=AWS_REGION)
+
 
 if not firebase_admin._apps and os.path.exists(FIREBASE_CREDENTIALS_PATH):
     cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)

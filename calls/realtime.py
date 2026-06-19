@@ -12,6 +12,8 @@ CALL_EVENTS = {
     "call_missed",
     "call_busy",
     "call_failed",
+    "call_video_enabled",
+    "call_video_disabled",
 }
 
 

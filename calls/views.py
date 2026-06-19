@@ -15,7 +15,6 @@ from rest_framework.views import APIView
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from .livekit import delete_room, generate_join_token, is_room_not_found_error, livekit_identity
 from .models import CallSession
 from .realtime import send_call_event
 from .serializers import CallSessionSerializer, StartCallSerializer
@@ -114,16 +113,14 @@ def queue_missed_call_timeout(call_id):
         logger.warning("Failed to queue missed call timeout for call_id=%s: %s", call_id, exc)
 
 
-def cleanup_livekit_room(call):
+def cleanup_provider_resources(call):
+    """Clean up the Chime meeting resources."""
     try:
-        delete_room(call.room_name)
-    except ImproperlyConfigured as exc:
-        logger.warning("LiveKit room cleanup skipped for call_id=%s: %s", call.id, exc)
+        from .chime import delete_meeting, ChimeError
+        delete_meeting(call)
     except Exception as exc:
-        if is_room_not_found_error(exc):
-            logger.info("LiveKit room already absent for call_id=%s room=%s", call.id, call.room_name)
-            return
-        logger.warning("LiveKit room cleanup failed for call_id=%s: %s", call.id, exc)
+        logger.warning("Chime meeting cleanup failed for call_id=%s: %s", call.id, exc)
+
 
 
 class CallHistoryPagination(LimitOffsetPagination):
@@ -167,14 +164,16 @@ class StartCall(APIView):
                 status=CallSession.Status.RINGING,
                 room_name=f"pending-call-{uuid.uuid4()}",
                 started_at=timezone.now(),
+                provider="chime",
             )
             call.room_name = f"call_{call.id}"
             call.save(update_fields=["room_name", "updated_at"])
             logger.info(
-                "call_created call_id=%s caller_id=%s receiver_id=%s created_at=%s",
+                "call_created call_id=%s caller_id=%s receiver_id=%s provider=%s created_at=%s",
                 call.id,
                 request.user.id,
                 receiver.id,
+                call.provider,
                 call.created_at.isoformat(),
             )
 
@@ -240,32 +239,16 @@ class JoinCall(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        from .chime import build_join_response, ChimeError
         try:
-            token = generate_join_token(request.user, call)
-        except ImproperlyConfigured as exc:
-            logger.warning("LiveKit token generation is unavailable: %s", exc)
+            payload = build_join_response(call, request.user)
+        except ChimeError as exc:
+            logger.warning("Chime join failed call_id=%s user_id=%s: %s", call.id, request.user.id, exc)
             return Response(
-                {"detail": "LiveKit is not configured", "code": "livekit_not_configured"},
+                {"detail": str(exc), "code": exc.code or "chime_error"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        logger.info(
-            "LiveKit join token generated call_id=%s user_id=%s identity=%s room_name=%s server_url=%s token_length=%s",
-            call.id,
-            request.user.id,
-            livekit_identity(request.user),
-            call.room_name,
-            settings.LIVEKIT_URL,
-            len(token),
-        )
-
-        return Response(
-            {
-                "call_id": call.id,
-                "server_url": settings.LIVEKIT_URL,
-                "room_name": call.room_name,
-                "token": token,
-            }
-        )
+        return Response(payload)
 
 
 class CallAction(APIView):
@@ -283,7 +266,7 @@ class CallAction(APIView):
 
         self.emit_events(request, call)
         if call.status in TERMINAL_STATUSES:
-            cleanup_livekit_room(call)
+            cleanup_provider_resources(call)
         return Response(CallSessionSerializer(call, context={"request": request}).data)
 
     def apply_action(self, request, call):
@@ -330,6 +313,18 @@ class AcceptCall(CallAction):
         call.status = CallSession.Status.ACCEPTED
         call.accepted_at = timezone.now()
         call.save(update_fields=["status", "accepted_at", "updated_at"])
+
+        try:
+            from .chime import provision_call, ChimeError
+            provision_call(call)
+        except ChimeError as exc:
+            logger.error("Chime provisioning failed for call_id=%s: %s", call.id, exc)
+            call.provider_error_code = exc.code or "chime_provision_error"
+            call.save(update_fields=["provider_error_code", "updated_at"])
+            return Response(
+                {"detail": f"Call provider error: {exc}", "code": "provider_error"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return None
 
     def emit_events(self, request, call):

@@ -35,6 +35,7 @@ class CallSessionSerializer(serializers.ModelSerializer):
             "receiver",
             "call_type",
             "status",
+            "provider",
             "room_name",
             "started_at",
             "accepted_at",
