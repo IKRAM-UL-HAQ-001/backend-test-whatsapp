@@ -30,3 +30,5 @@ sqlparse==0.5.3
 twilio==9.3.7
 uvicorn==0.35.0
 whitenoise==6.8.2
+python-decouple==3.8
+mysqlclient==2.2.4

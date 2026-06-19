@@ -1,4 +1,5 @@
 import logging
+import os
 from io import BytesIO
 from typing import Optional
 
@@ -45,6 +46,14 @@ def create_image_thumbnail(upload, size=(200, 200)):
 def get_firebase_app() -> Optional[firebase_admin.App]:
     if firebase_admin._apps:
         return firebase_admin.get_app()
+
+    credentials_path = getattr(settings, "FIREBASE_CREDENTIALS_PATH", None)
+    if credentials_path and os.path.exists(credentials_path):
+        try:
+            cred = credentials.Certificate(credentials_path)
+            return firebase_admin.initialize_app(cred)
+        except Exception:
+            logger.exception("Failed to initialize Firebase from FIREBASE_CREDENTIALS_PATH")
 
     if not (settings.FIREBASE_PROJECT_ID and settings.FIREBASE_CLIENT_EMAIL and settings.FIREBASE_PRIVATE_KEY):
         logger.warning("Firebase credentials are not configured; push notifications disabled.")
