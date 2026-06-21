@@ -161,7 +161,7 @@ class StartCall(APIView):
                 caller=request.user,
                 receiver=receiver,
                 call_type=serializer.validated_data["call_type"],
-                status=CallSession.Status.RINGING,
+                status=CallSession.Status.INITIATED,
                 room_name=f"pending-call-{uuid.uuid4()}",
                 started_at=timezone.now(),
                 provider="chime",
@@ -178,7 +178,11 @@ class StartCall(APIView):
             )
 
         send_call_event(receiver.id, "call_invite", call)
-        send_call_event(request.user.id, "call_ringing", call)
+        # Do NOT mark the call as ringing yet. The caller stays on "Calling..."
+        # until the receiver's device confirms it is actually ringing (the
+        # ChatConsumer "call_ringing" ack flips the status to RINGING and
+        # notifies the caller). If the receiver is unreachable/offline, no ack
+        # arrives and the caller never sees "Ringing" — matching WhatsApp.
         queue_incoming_call_notification(call.id)
         queue_missed_call_timeout(call.id)
         return Response(CallSessionSerializer(call, context={"request": request}).data, status=status.HTTP_201_CREATED)
@@ -296,7 +300,7 @@ class AcceptCall(CallAction):
         permission_error = self.require_receiver(request, call)
         if permission_error:
             return permission_error
-        if call.status != CallSession.Status.RINGING:
+        if call.status not in {CallSession.Status.RINGING, CallSession.Status.INITIATED}:
             return Response({"detail": "Only ringing calls can be accepted."}, status=status.HTTP_400_BAD_REQUEST)
         lock_users(call.caller_id, call.receiver_id)
         conflicts = non_terminal_calls_for_users(call.caller, call.receiver).exclude(id=call.id)
@@ -337,7 +341,7 @@ class RejectCall(CallAction):
         permission_error = self.require_receiver(request, call)
         if permission_error:
             return permission_error
-        if call.status != CallSession.Status.RINGING:
+        if call.status not in {CallSession.Status.RINGING, CallSession.Status.INITIATED}:
             return Response({"detail": "Only ringing calls can be rejected."}, status=status.HTTP_400_BAD_REQUEST)
         call.status = CallSession.Status.REJECTED
         call.ended_at = timezone.now()

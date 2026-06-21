@@ -268,7 +268,10 @@ LINK_TOKEN_RATE_LIMIT_MAX = config("LINK_TOKEN_RATE_LIMIT_MAX", default=3, cast=
 LINK_TOKEN_RATE_LIMIT_WINDOW_SECONDS = config("LINK_TOKEN_RATE_LIMIT_WINDOW_SECONDS", default=60, cast=int)
 LINK_STATUS_POLL_SECONDS = config("LINK_STATUS_POLL_SECONDS", default=1, cast=int)
 WEBSOCKET_TICKET_TTL_SECONDS = config("WEBSOCKET_TICKET_TTL_SECONDS", default=30, cast=int)
-PRESENCE_TTL_SECONDS = config("PRESENCE_TTL_SECONDS", default=45, cast=int)
+# Keep this comfortably above the client WebSocket heartbeat interval (20s) so a
+# single missed heartbeat does not flap presence, but low enough that an abrupt
+# disconnect (no graceful close) reflects as offline quickly.
+PRESENCE_TTL_SECONDS = config("PRESENCE_TTL_SECONDS", default=30, cast=int)
 CALL_RING_TIMEOUT_SECONDS = config("CALL_RING_TIMEOUT_SECONDS", default=60, cast=int)
 ACTIVE_CALL_STALE_TIMEOUT_SECONDS = config("ACTIVE_CALL_STALE_TIMEOUT_SECONDS", default=180, cast=int)
 CONTACT_DEFAULT_COUNTRY_CODE = config("CONTACT_DEFAULT_COUNTRY_CODE", default="+92")

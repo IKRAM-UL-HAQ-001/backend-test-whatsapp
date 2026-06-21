@@ -4,10 +4,16 @@ from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
+from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 from .models import Chat, Message, MessageReceipt, MessageStatus
 from users.models import User
+
+
+def _presence_ttl():
+    return getattr(settings, "PRESENCE_TTL_SECONDS", 30)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -22,12 +28,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.channel_layer.group_add(self.group_name, self.channel_name)
             await self.accept()
             await self.mark_presence()
+            await self.broadcast_presence(True)
         else:
             await self.close()
 
     async def disconnect(self, close_code):
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        # Mark the user offline immediately on a clean disconnect (app closed,
+        # network change, logout) instead of waiting for the presence TTL to
+        # lapse, and push the change to their chat partners so open chats update
+        # live. Abrupt drops that never fire disconnect are still covered by the
+        # short presence TTL expiring once heartbeats stop.
+        if getattr(self, "user", None):
+            await self.clear_presence()
+            await self.broadcast_presence(False)
 
     @database_sync_to_async
     def get_user(self, ticket):
@@ -40,7 +55,34 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def mark_presence(self):
-        cache.set(f"presence:{self.user.id}", "online", timeout=45)
+        cache.set(f"presence:{self.user.id}", "online", timeout=_presence_ttl())
+
+    @database_sync_to_async
+    def clear_presence(self):
+        cache.delete(f"presence:{self.user.id}")
+
+    @database_sync_to_async
+    def _chat_partner_ids(self):
+        pairs = Chat.objects.filter(
+            Q(user1=self.user) | Q(user2=self.user)
+        ).values_list("user1_id", "user2_id")
+        ids = set()
+        for user1_id, user2_id in pairs:
+            ids.add(user1_id)
+            ids.add(user2_id)
+        ids.discard(self.user.id)
+        return list(ids)
+
+    async def broadcast_presence(self, is_online):
+        partner_ids = await self._chat_partner_ids()
+        for partner_id in partner_ids:
+            await self.channel_layer.group_send(
+                f"user_{partner_id}",
+                {
+                    "type": "presence_update_event",
+                    "payload": {"user_id": self.user.id, "is_online": is_online},
+                },
+            )
 
     async def receive(self, text_data=None, bytes_data=None):
         await self.mark_presence()
@@ -57,6 +99,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.mark_messages_delivered(message_ids)
         elif event == "chat_opened":
             await self.mark_chat_read(payload.get("chat_id"))
+        elif event == "call_ringing":
+            await self.ack_call_ringing(payload.get("call_id"))
 
     async def _send_event(self, event_name, payload):
         await self.send(
@@ -94,6 +138,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def typing_event(self, event):
         await self._send_event("typing", event.get("payload", {}))
 
+    async def presence_update_event(self, event):
+        await self._send_event("presence_update", event.get("payload", {}))
+
     async def new_user_status_event(self, event):
         await self._send_event("new_user_status", event.get("payload", {}))
 
@@ -126,6 +173,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def call_failed_event(self, event):
         await self._send_event("call_failed", event.get("payload", {}))
+
+    @database_sync_to_async
+    def ack_call_ringing(self, call_id):
+        # The receiver's device confirms it is actually ringing. Promote the
+        # call INITIATED -> RINGING and notify the caller so "Calling..." flips
+        # to "Ringing...". Ignored if the call is gone, already past ringing, or
+        # the acking user is not the receiver.
+        if not call_id:
+            return
+        from calls.models import CallSession
+        from calls.realtime import send_call_event
+
+        call = (
+            CallSession.objects.select_related("caller", "receiver")
+            .filter(id=call_id)
+            .first()
+        )
+        if call is None or call.receiver_id != self.user.id:
+            return
+        if call.status != CallSession.Status.INITIATED:
+            return
+        call.status = CallSession.Status.RINGING
+        call.save(update_fields=["status", "updated_at"])
+        send_call_event(call.caller_id, "call_ringing", call)
 
     @database_sync_to_async
     def mark_messages_delivered(self, message_ids):
