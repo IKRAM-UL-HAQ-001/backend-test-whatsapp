@@ -5,6 +5,8 @@ from celery import shared_task
 
 from .utils import send_push_notification
 from .utils import get_firebase_app
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.core.cache import cache
 from firebase_admin import messaging
 from django.utils import timezone
@@ -26,6 +28,19 @@ def _is_invalid_token_error(exc):
     )
 
 
+def broadcast_socket_event(user_id, event_name, payload):
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+    async_to_sync(channel_layer.group_send)(
+        f"user_{user_id}",
+        {
+            "type": f"{event_name}_event",
+            "payload": payload,
+        },
+    )
+
+
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=2, retry_kwargs={"max_retries": 3})
 def send_push_notification_task(self, receiver_id, title, message, data=None):
     from users.models import User
@@ -39,7 +54,7 @@ def send_push_notification_task(self, receiver_id, title, message, data=None):
 @shared_task(bind=True, max_retries=3)
 def send_message_notification(self, message_id, recipient_id):
     try:
-        from chat.models import Message
+        from chat.models import Message, MessageReceipt, MessageStatus
         from users.models import User
 
         logger.info(
@@ -176,6 +191,32 @@ def send_message_notification(self, message_id, recipient_id):
         )
         cache.set(sent_key, "1", timeout=60 * 60 * 24 * 7)
         cache.delete(lock_key)
+
+        # Notification messages displayed by Android/iOS while the Flutter app
+        # is backgrounded or terminated do not reliably execute Dart code. A
+        # successful provider handoff is therefore the delivery acknowledgement
+        # for push recipients. The guarded SENT update keeps the lifecycle
+        # monotonic and can never downgrade an already-read message.
+        now = timezone.now()
+        updated = Message.objects.filter(
+            id=message.id,
+            status=MessageStatus.SENT,
+        ).update(status=MessageStatus.DELIVERED, delivered_at=now)
+        if updated:
+            MessageReceipt.objects.filter(
+                message=message,
+                user=recipient,
+            ).update(delivered_at=now)
+            broadcast_socket_event(
+                message.sender_id,
+                "status_update",
+                {
+                    "message_ids": [str(message.id)],
+                    "chat_id": message.chat_id,
+                    "status": MessageStatus.DELIVERED,
+                    "delivered_at": now.isoformat(),
+                },
+            )
 
         return f"Notification sent to {recipient.phone_number}"
 

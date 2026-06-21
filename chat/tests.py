@@ -114,11 +114,14 @@ class ChatApiTests(APITestCase):
 
     @patch("chat.tasks.messaging.send", return_value="firebase-message-id")
     @patch("chat.tasks.get_firebase_app", return_value=object())
-    def test_push_provider_acceptance_does_not_mark_message_delivered(
+    @patch("chat.tasks.get_channel_layer")
+    def test_push_provider_acceptance_marks_message_delivered(
         self,
+        channel_layer_mock,
         firebase_app_mock,
         firebase_send_mock,
     ):
+        channel_layer_mock.return_value = DummyChannelLayer()
         chat = Chat.objects.create(user1=self.sender, user2=self.receiver)
         message = Message.objects.create(
             chat=chat,
@@ -133,9 +136,9 @@ class ChatApiTests(APITestCase):
 
         message.refresh_from_db()
         receipt = MessageReceipt.objects.get(message=message, user=self.receiver)
-        self.assertEqual(message.status, MessageStatus.SENT)
-        self.assertIsNone(message.delivered_at)
-        self.assertIsNone(receipt.delivered_at)
+        self.assertEqual(message.status, MessageStatus.DELIVERED)
+        self.assertIsNotNone(message.delivered_at)
+        self.assertIsNotNone(receipt.delivered_at)
         firebase_send_mock.assert_called_once()
 
     @patch("chat.views.get_channel_layer")
