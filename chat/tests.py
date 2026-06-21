@@ -2,7 +2,8 @@ from unittest.mock import patch
 
 from rest_framework.test import APIClient, APITestCase
 
-from chat.models import Chat, Message
+from chat.models import Chat, Message, MessageReceipt, MessageStatus
+from chat.tasks import send_message_notification
 from users.models import User
 
 
@@ -110,6 +111,69 @@ class ChatApiTests(APITestCase):
         client.force_authenticate(user=self.third)
         response = client.post("/api/react/", {"message_id": message.id, "emoji": "👍"}, format="json")
         self.assertEqual(response.status_code, 403)
+
+    @patch("chat.tasks.messaging.send", return_value="firebase-message-id")
+    @patch("chat.tasks.get_firebase_app", return_value=object())
+    def test_push_provider_acceptance_does_not_mark_message_delivered(
+        self,
+        firebase_app_mock,
+        firebase_send_mock,
+    ):
+        chat = Chat.objects.create(user1=self.sender, user2=self.receiver)
+        message = Message.objects.create(
+            chat=chat,
+            sender=self.sender,
+            encrypted_text="wait for device receipt",
+            message_type="text",
+            status=MessageStatus.SENT,
+        )
+        MessageReceipt.objects.create(message=message, user=self.receiver)
+
+        send_message_notification.run(message.id, self.receiver.id)
+
+        message.refresh_from_db()
+        receipt = MessageReceipt.objects.get(message=message, user=self.receiver)
+        self.assertEqual(message.status, MessageStatus.SENT)
+        self.assertIsNone(message.delivered_at)
+        self.assertIsNone(receipt.delivered_at)
+        firebase_send_mock.assert_called_once()
+
+    @patch("chat.views.get_channel_layer")
+    def test_device_delivery_then_chat_read_progresses_receipts(self, channel_layer_mock):
+        dummy_channel_layer = DummyChannelLayer()
+        channel_layer_mock.return_value = dummy_channel_layer
+        chat = Chat.objects.create(user1=self.sender, user2=self.receiver)
+        message = Message.objects.create(
+            chat=chat,
+            sender=self.sender,
+            encrypted_text="receipt lifecycle",
+            message_type="text",
+            status=MessageStatus.SENT,
+        )
+        MessageReceipt.objects.create(message=message, user=self.receiver)
+        client = APIClient()
+        client.force_authenticate(user=self.receiver)
+
+        delivered = client.post(
+            "/api/messages/delivered/",
+            {"message_ids": [message.id]},
+            format="json",
+        )
+        self.assertEqual(delivered.status_code, 200)
+        message.refresh_from_db()
+        self.assertEqual(message.status, MessageStatus.DELIVERED)
+
+        read = client.post(
+            "/api/messages/read/",
+            {"chat_id": chat.id},
+            format="json",
+        )
+        self.assertEqual(read.status_code, 200)
+        message.refresh_from_db()
+        receipt = MessageReceipt.objects.get(message=message, user=self.receiver)
+        self.assertEqual(message.status, MessageStatus.READ)
+        self.assertIsNotNone(receipt.delivered_at)
+        self.assertIsNotNone(receipt.read_at)
 
     def test_messages_endpoint_is_paginated(self):
         chat = Chat.objects.create(user1=self.sender, user2=self.receiver)

@@ -527,6 +527,7 @@ class ForwardMessage(APIView):
         ).data
         broadcast_socket_event(receiver.id, "chat_message", payload)
         broadcast_socket_event(request.user.id, "chat_message", payload)
+        queue_push_notification(msg.id, receiver.id)
         return Response(payload, status=status.HTTP_201_CREATED)
 
 
