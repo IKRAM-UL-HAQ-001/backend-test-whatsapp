@@ -295,6 +295,54 @@ class CallAction(APIView):
         return None
 
 
+class CallHeartbeat(APIView):
+    """Keep-alive ping from an in-call client.
+
+    Refreshes the call's updated_at so cleanup_stale_active_calls does not reap
+    a healthy long-running call. Without this, an active call's row is never
+    re-saved (media flows through Chime, not the DB), so updated_at stays frozen
+    at accept time and the call is force-ended once it crosses
+    ACTIVE_CALL_STALE_TIMEOUT_SECONDS (~3 min). A single bulk UPDATE — no lock,
+    no serialization. (QuerySet.update bypasses auto_now, so set it explicitly.)
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, call_id):
+        updated = (
+            CallSession.objects.filter(id=call_id)
+            .filter(Q(caller=request.user) | Q(receiver=request.user))
+            .filter(status__in=[CallSession.Status.ACCEPTED, CallSession.Status.ACTIVE])
+            .update(updated_at=timezone.now())
+        )
+        return Response({"ok": bool(updated)})
+
+
+class RingingCall(CallAction):
+    """Receiver's device confirms it is actually ringing.
+
+    Promotes INITIATED -> RINGING and notifies the caller so "Calling..."
+    becomes "Ringing...". Idempotent and best-effort: this is the HTTP twin of
+    the WebSocket `call_ringing` ack, used when the receiver was reached via
+    push (app closed/backgrounded) and has no live socket to ack over.
+    """
+
+    def apply_action(self, request, call):
+        self._did_ring = False
+        permission_error = self.require_receiver(request, call)
+        if permission_error:
+            return permission_error
+        if call.status == CallSession.Status.INITIATED:
+            call.status = CallSession.Status.RINGING
+            call.save(update_fields=["status", "updated_at"])
+            self._did_ring = True
+        return None
+
+    def emit_events(self, request, call):
+        if getattr(self, "_did_ring", False):
+            send_call_event(call.caller_id, "call_ringing", call)
+
+
 class AcceptCall(CallAction):
     def apply_action(self, request, call):
         permission_error = self.require_receiver(request, call)
