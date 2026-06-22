@@ -250,7 +250,7 @@ class SendMessage(APIView):
 
         u1, u2 = sorted([request.user, receiver], key=lambda user: user.id)
         chat, _ = Chat.objects.get_or_create(user1=u1, user2=u2)
-        restore_chat_for_participants(chat, request.user, receiver)
+        restore_chat_for_participants(chat, request.user)  # only restore for sender; receiver keeps their deleted state
 
         existing = Message.objects.filter(sender=request.user, client_uuid=data.get("client_uuid")).first()
         if existing:
@@ -489,7 +489,7 @@ class ForwardMessage(APIView):
             u1, u2 = sorted([request.user, receiver], key=lambda user: user.id)
             chat, _ = Chat.objects.get_or_create(user1=u1, user2=u2)
 
-        restore_chat_for_participants(chat, request.user, receiver)
+        restore_chat_for_participants(chat, request.user)  # only restore for sender; receiver keeps their deleted state
         msg = Message(
             chat=chat,
             sender=request.user,
