@@ -328,7 +328,7 @@ class DeleteMessage(APIView):
         if delete_type == "for_everyone":
             if msg.sender_id != request.user.id:
                 return Response({"error": "Only sender can delete for everyone"}, status=status.HTTP_403_FORBIDDEN)
-            if timezone.now() > msg.created_at + timedelta(seconds=60):
+            if timezone.now() > msg.created_at + timedelta(hours=24):
                 return Response({"error": "Delete for everyone window expired"}, status=status.HTTP_400_BAD_REQUEST)
             msg.is_deleted_for_everyone = True
             msg.encrypted_text = ""
