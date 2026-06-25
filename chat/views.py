@@ -119,20 +119,41 @@ def other_participant(chat, user):
 
 
 def restore_chat_for_participants(chat, *users):
+    # Re-show a previously deleted chat for these users when a new message
+    # arrives. We only flip the hidden flag back off; the `deleted_at_userX`
+    # timestamp is kept as a per-user watermark so the user only ever sees
+    # messages sent AFTER their deletion (WhatsApp-style — the conversation
+    # comes back fresh, the old history stays gone for them).
     changed_fields = []
     for user in users:
         if user is None:
             continue
         if chat.user1_id == user.id and chat.deleted_for_user1:
             chat.deleted_for_user1 = False
-            chat.deleted_at_user1 = None
-            changed_fields.extend(["deleted_for_user1", "deleted_at_user1"])
+            changed_fields.append("deleted_for_user1")
         elif chat.user2_id == user.id and chat.deleted_for_user2:
             chat.deleted_for_user2 = False
-            chat.deleted_at_user2 = None
-            changed_fields.extend(["deleted_for_user2", "deleted_at_user2"])
+            changed_fields.append("deleted_for_user2")
     if changed_fields:
         chat.save(update_fields=list(dict.fromkeys(changed_fields)))
+
+
+def chat_clear_watermark(chat, user):
+    """The timestamp before which [user] has cleared this chat, or None."""
+    if chat.user1_id == user.id:
+        return chat.deleted_at_user1
+    if chat.user2_id == user.id:
+        return chat.deleted_at_user2
+    return None
+
+
+def visible_messages_after_watermark(queryset, chat, user):
+    """Hide messages a user deleted via 'delete chat' (created at/before their
+    clear watermark) while leaving them intact for the other participant."""
+    watermark = chat_clear_watermark(chat, user)
+    if watermark is not None:
+        queryset = queryset.filter(created_at__gt=watermark)
+    return queryset
 
 
 def update_message_statuses(messages, next_status, timestamp=None):
@@ -219,6 +240,7 @@ class ChatMessages(APIView):
             .prefetch_related("reactions__user", "statuses", "deleted_for_users")
             .order_by("-created_at")
         )
+        messages = visible_messages_after_watermark(messages, chat, request.user)
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(messages, request)
@@ -250,7 +272,10 @@ class SendMessage(APIView):
 
         u1, u2 = sorted([request.user, receiver], key=lambda user: user.id)
         chat, _ = Chat.objects.get_or_create(user1=u1, user2=u2)
-        restore_chat_for_participants(chat, request.user)  # only restore for sender; receiver keeps their deleted state
+        # A new message un-hides the conversation for BOTH sides. Each side keeps
+        # its own clear watermark, so a participant who deleted the chat sees it
+        # reappear with only this (and later) message — never the old history.
+        restore_chat_for_participants(chat, request.user, receiver)
 
         existing = Message.objects.filter(sender=request.user, client_uuid=data.get("client_uuid")).first()
         if existing:
@@ -444,6 +469,7 @@ class SharedMediaView(APIView):
             .select_related("sender")
             .order_by("-created_at")
         )
+        messages = visible_messages_after_watermark(messages, chat, request.user)
 
         if media_type == "media":
             messages = messages.filter(message_type__in=["image", "video"])
@@ -489,7 +515,7 @@ class ForwardMessage(APIView):
             u1, u2 = sorted([request.user, receiver], key=lambda user: user.id)
             chat, _ = Chat.objects.get_or_create(user1=u1, user2=u2)
 
-        restore_chat_for_participants(chat, request.user)  # only restore for sender; receiver keeps their deleted state
+        restore_chat_for_participants(chat, request.user, receiver)
         msg = Message(
             chat=chat,
             sender=request.user,
@@ -638,8 +664,17 @@ class UserChats(APIView):
     pagination_class = ChatListPagination
 
     def get(self, request):
-        last_message_queryset = Message.objects.filter(chat=OuterRef("pk")).order_by("-created_at")
         my_user_id = request.user.id
+        # Hide messages the viewer cleared via "delete chat" (created at/before
+        # their per-user watermark) from the preview and unread count, so a chat
+        # that reappears after deletion shows only the fresh messages. NULL
+        # watermark (never deleted) compares falsey, so nothing is hidden.
+        last_message_queryset = (
+            Message.objects.filter(chat=OuterRef("pk"))
+            .exclude(chat__user1_id=my_user_id, created_at__lte=OuterRef("deleted_at_user1"))
+            .exclude(chat__user2_id=my_user_id, created_at__lte=OuterRef("deleted_at_user2"))
+            .order_by("-created_at")
+        )
         chats = (
             Chat.objects.filter(Q(user1=request.user) | Q(user2=request.user))
             .exclude(Q(user1=request.user, deleted_for_user1=True) | Q(user2=request.user, deleted_for_user2=True))
@@ -656,7 +691,9 @@ class UserChats(APIView):
                 unread_count=Count(
                     "messages__statuses",
                     filter=Q(messages__statuses__user=request.user, messages__statuses__read_at__isnull=True)
-                    & ~Q(messages__sender=request.user),
+                    & ~Q(messages__sender=request.user)
+                    & ~Q(messages__created_at__lte=F("deleted_at_user1"), user1_id=my_user_id)
+                    & ~Q(messages__created_at__lte=F("deleted_at_user2"), user2_id=my_user_id),
                     distinct=True,
                 ),
                 other_user_id=Case(When(user1_id=my_user_id, then=F("user2_id")), default=F("user1_id")),

@@ -111,11 +111,12 @@ def send_message_notification(self, message_id, recipient_id):
 
         sender_name = message.sender.name or "Someone"
 
+        # Android: send DATA-ONLY (no `notification` block) so the app itself
+        # renders the message notification via the FCM background/foreground
+        # handler. That lets the app track each notification per-chat and clear
+        # it from the tray the moment the chat is opened (WhatsApp behaviour).
+        # iOS keeps the APNS alert below so it still displays when terminated.
         fcm_message = messaging.Message(
-            notification=messaging.Notification(
-                title=sender_name,
-                body=body,
-            ),
             data={
                 "type": "message",
                 "title": sender_name,
@@ -130,11 +131,6 @@ def send_message_notification(self, message_id, recipient_id):
             android=messaging.AndroidConfig(
                 priority="high",
                 ttl=timedelta(minutes=5),
-                notification=messaging.AndroidNotification(
-                    channel_id="m2m_messages_default_v1",
-                    sound="default",
-                    click_action="FLUTTER_NOTIFICATION_CLICK",
-                ),
             ),
             apns=messaging.APNSConfig(
                 headers={
