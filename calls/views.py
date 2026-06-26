@@ -371,8 +371,22 @@ class AcceptCall(CallAction):
             provision_call(call)
         except ChimeError as exc:
             logger.error("Chime provisioning failed for call_id=%s: %s", call.id, exc)
+            # The call was already promoted to ACCEPTED above. If we leave it
+            # there, the caller is stranded on "Connecting..." until the stale
+            # reaper ends it (~3 min) and any half-created Chime meeting leaks.
+            # Fail the call cleanly instead: mark FAILED, tell BOTH parties
+            # (client maps call_failed -> CallState.failed), and release any
+            # provider resources. emit_events()/terminal-cleanup in the base
+            # CallAction are skipped once we return a response, so do it here.
+            call.status = CallSession.Status.FAILED
+            call.ended_at = timezone.now()
             call.provider_error_code = exc.code or "chime_provision_error"
-            call.save(update_fields=["provider_error_code", "updated_at"])
+            call.save(
+                update_fields=["status", "ended_at", "provider_error_code", "updated_at"]
+            )
+            send_call_event(call.caller_id, "call_failed", call)
+            send_call_event(call.receiver_id, "call_failed", call)
+            cleanup_provider_resources(call)
             return Response(
                 {"detail": f"Call provider error: {exc}", "code": "provider_error"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
