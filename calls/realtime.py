@@ -43,14 +43,23 @@ def serialize_call(call):
     }
 
 
-def call_event_payload(event_name, call):
-    return {
+def call_event_payload(event_name, call, extra=None):
+    payload = {
         "type": event_name,
         "call": serialize_call(call),
     }
+    if extra:
+        payload.update(extra)
+    return payload
 
 
-def send_call_event(user_id, event_name, call):
+def send_call_event(user_id, event_name, call, extra=None):
+    """Push a call event to a user's socket group.
+
+    ``extra`` is merged into the payload — used to embed the receiver's Chime
+    join credentials in ``call_invite`` so the client can connect media without
+    a separate /join/ round-trip. Only ever send a user their own credentials.
+    """
     if event_name not in CALL_EVENTS:
         raise ValueError(f"Unsupported call event: {event_name}")
     channel_layer = get_channel_layer()
@@ -60,6 +69,6 @@ def send_call_event(user_id, event_name, call):
         f"user_{user_id}",
         {
             "type": f"{event_name}_event",
-            "payload": call_event_payload(event_name, call),
+            "payload": call_event_payload(event_name, call, extra=extra),
         },
     )

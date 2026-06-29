@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import DeviceLinkToken, InviteLog, OTP, User, UserContact, WebSocketTicket
+from .models import Device, DeviceLinkToken, InviteLog, OTP, User, UserContact, WebSocketTicket
 from .rate_limits import hit_rate_limit
 from .serializers import (
     ActivateLinkTokenSerializer,
@@ -251,6 +251,56 @@ class UpdateFcmToken(APIView):
 
         request.user.fcm_token = token
         request.user.save(update_fields=["fcm_token"])
+        return Response({"success": True})
+
+
+class RegisterDevice(APIView):
+    """
+    POST /auth/devices/register/
+    Auth: bearer
+    Request: { device_id, platform: android|ios, fcm_token?, apns_voip_token?, app_version? }
+    Response: { success: true }
+
+    Upserts the per-device push tokens. iOS sends its PushKit VoIP token here;
+    Android sends its FCM data-push token. For an Android device the FCM token is
+    also mirrored onto User.fcm_token so the existing single-token push path keeps
+    working until the push layer is migrated to per-device fan-out.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        device_id = (request.data.get("device_id") or "").strip()
+        platform = (request.data.get("platform") or "").strip().lower()
+        if not device_id:
+            return Response({"error": "device_id required"}, status=status.HTTP_400_BAD_REQUEST)
+        if platform not in dict(Device.Platform.choices):
+            return Response(
+                {"error": "platform must be 'android' or 'ios'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fcm_token = request.data.get("fcm_token") or None
+        apns_voip_token = request.data.get("apns_voip_token") or None
+        app_version = (request.data.get("app_version") or "").strip()
+
+        device, _ = Device.objects.update_or_create(
+            user=request.user,
+            device_id=device_id,
+            defaults={
+                "platform": platform,
+                "fcm_token": fcm_token,
+                "apns_voip_token": apns_voip_token,
+                "app_version": app_version,
+            },
+        )
+
+        # Backward-compat: keep the legacy single token populated for Android so
+        # the current push path still reaches this user.
+        if platform == Device.Platform.ANDROID and fcm_token and request.user.fcm_token != fcm_token:
+            request.user.fcm_token = fcm_token
+            request.user.save(update_fields=["fcm_token"])
+
         return Response({"success": True})
 
 

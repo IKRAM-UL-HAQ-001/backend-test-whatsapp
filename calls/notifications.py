@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import timedelta
 
@@ -16,9 +17,20 @@ def _profile_picture_url(user):
     return ""
 
 
+def _receiver_join_creds(call):
+    """The receiver's own Chime join credentials if the call is already
+    provisioned (it is, when provisioned at start), else None. Best-effort —
+    the client falls back to /join/ when these are absent."""
+    try:
+        from .chime import build_join_response
+        return build_join_response(call, call.receiver)
+    except Exception:
+        return None
+
+
 def incoming_call_payload(call):
     caller_name = call.caller.name or call.caller.phone_number
-    return {
+    payload = {
         "type": "incoming_call",
         "call_id": str(call.id),
         "caller_id": str(call.caller_id),
@@ -27,6 +39,12 @@ def incoming_call_payload(call):
         "call_type": call.call_type,
         "room_name": call.room_name,
     }
+    # Embed join creds (JSON-encoded — FCM data values must be strings) so a
+    # killed/background app can start connecting Chime straight off the push.
+    creds = _receiver_join_creds(call)
+    if creds:
+        payload["chime"] = json.dumps(creds)
+    return payload
 
 
 def missed_call_payload(call):

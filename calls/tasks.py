@@ -79,6 +79,15 @@ def mark_call_missed_if_unanswered(call_id):
         call.ended_by = None
         call.save(update_fields=["status", "ended_at", "duration_seconds", "ended_by", "updated_at"])
 
+    # A call is now provisioned at start, so an unanswered call leaves a live
+    # Chime meeting behind. Reject/cancel/end clean up via CallAction, but the
+    # missed path does not go through it — delete the meeting here or it leaks.
+    try:
+        from .chime import delete_meeting
+        delete_meeting(call)
+    except Exception as exc:
+        logger.warning("Chime meeting cleanup failed for missed call_id=%s: %s", call.id, exc)
+
     try:
         send_call_event(call.caller_id, "call_missed", call)
         send_call_event(call.receiver_id, "call_missed", call)

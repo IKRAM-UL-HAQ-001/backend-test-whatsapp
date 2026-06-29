@@ -122,6 +122,25 @@ def cleanup_provider_resources(call):
         logger.warning("Chime meeting cleanup failed for call_id=%s: %s", call.id, exc)
 
 
+def provision_and_build_creds(call, user):
+    """Best-effort: provision the Chime meeting at call start and return *user*'s
+    own join credentials, or None if provisioning isn't available.
+
+    Provisioning early lets the receiver connect media the moment they accept —
+    no separate /join/ round-trip. It is non-fatal: AcceptCall still calls
+    provision_call() (idempotent) as a fallback, so a failure here just means we
+    fall back to the original accept-time provisioning path. Runs outside the
+    DB transaction because it makes AWS API calls.
+    """
+    try:
+        from .chime import provision_call, build_join_response
+        provision_call(call)
+        return build_join_response(call, user)
+    except Exception as exc:
+        logger.info("start_provision_skipped call_id=%s: %s", call.id, exc)
+        return None
+
+
 
 class CallHistoryPagination(LimitOffsetPagination):
     default_limit = 20
@@ -177,7 +196,16 @@ class StartCall(APIView):
                 call.created_at.isoformat(),
             )
 
-        send_call_event(receiver.id, "call_invite", call)
+        # Provision Chime now (outside the transaction — AWS network I/O) and
+        # embed the receiver's own join credentials in the invite so they can
+        # connect media without a /join/ round-trip after accepting.
+        receiver_creds = provision_and_build_creds(call, receiver)
+        send_call_event(
+            receiver.id,
+            "call_invite",
+            call,
+            extra={"chime": receiver_creds} if receiver_creds else None,
+        )
         # Do NOT mark the call as ringing yet. The caller stays on "Calling..."
         # until the receiver's device confirms it is actually ringing (the
         # ChatConsumer "call_ringing" ack flips the status to RINGING and

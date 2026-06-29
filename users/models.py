@@ -72,6 +72,41 @@ class User(AbstractBaseUser):
         return self.is_superuser
 
 
+class Device(models.Model):
+    """A registered device for push delivery.
+
+    One row per (user, device_id). Holds both the Android FCM data-push token
+    and the iOS PushKit VoIP-push token so call invites can fan out to every
+    device a user is signed in on. Replaces the single ``User.fcm_token`` field
+    (which is kept in sync for the Android device for backward compatibility
+    until the push layer is fully migrated to fan-out).
+    """
+
+    class Platform(models.TextChoices):
+        ANDROID = "android", "Android"
+        IOS = "ios", "iOS"
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="devices")
+    device_id = models.CharField(max_length=128)
+    platform = models.CharField(max_length=10, choices=Platform.choices)
+    fcm_token = models.TextField(null=True, blank=True)
+    apns_voip_token = models.CharField(max_length=200, null=True, blank=True)
+    app_version = models.CharField(max_length=40, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "device_id"], name="unique_user_device"),
+        ]
+        indexes = [
+            models.Index(fields=["user", "platform"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user.phone_number} · {self.platform} · {self.device_id}"
+
+
 class OTP(models.Model):
     phone_number = models.CharField(max_length=20)
     otp_code = models.CharField(max_length=10)
