@@ -668,12 +668,27 @@ class UserChats(APIView):
         my_user_id = request.user.id
         # Hide messages the viewer cleared via "delete chat" (created at/before
         # their per-user watermark) from the preview and unread count, so a chat
-        # that reappears after deletion shows only the fresh messages. NULL
-        # watermark (never deleted) compares falsey, so nothing is hidden.
+        # that reappears after deletion shows only the fresh messages.
+        #
+        # The `deleted_at_user*__isnull=False` guard is load-bearing: without it,
+        # a NULL watermark (the normal "never cleared" case) makes
+        # `created_at <= NULL` evaluate to SQL UNKNOWN, and `NOT (TRUE AND
+        # UNKNOWN)` is UNKNOWN — which the subquery treats as "exclude this row".
+        # That silently dropped EVERY message, so `last_message` came back null
+        # and the chat list showed "No messages yet" for chats that clearly had
+        # messages. Only apply the watermark comparison when a watermark exists.
         last_message_queryset = (
             Message.objects.filter(chat=OuterRef("pk"))
-            .exclude(chat__user1_id=my_user_id, created_at__lte=OuterRef("deleted_at_user1"))
-            .exclude(chat__user2_id=my_user_id, created_at__lte=OuterRef("deleted_at_user2"))
+            .exclude(
+                Q(chat__user1_id=my_user_id)
+                & Q(chat__deleted_at_user1__isnull=False)
+                & Q(created_at__lte=OuterRef("deleted_at_user1"))
+            )
+            .exclude(
+                Q(chat__user2_id=my_user_id)
+                & Q(chat__deleted_at_user2__isnull=False)
+                & Q(created_at__lte=OuterRef("deleted_at_user2"))
+            )
             .order_by("-created_at")
         )
         chats = (
@@ -693,8 +708,12 @@ class UserChats(APIView):
                     "messages__statuses",
                     filter=Q(messages__statuses__user=request.user, messages__statuses__read_at__isnull=True)
                     & ~Q(messages__sender=request.user)
-                    & ~Q(messages__created_at__lte=F("deleted_at_user1"), user1_id=my_user_id)
-                    & ~Q(messages__created_at__lte=F("deleted_at_user2"), user2_id=my_user_id),
+                    # Same NULL-watermark guard as the last_message subquery above
+                    # (see note there): only subtract cleared messages when a
+                    # watermark actually exists, so a NULL watermark never makes
+                    # the negated term collapse to UNKNOWN.
+                    & ~Q(messages__created_at__lte=F("deleted_at_user1"), user1_id=my_user_id, deleted_at_user1__isnull=False)
+                    & ~Q(messages__created_at__lte=F("deleted_at_user2"), user2_id=my_user_id, deleted_at_user2__isnull=False),
                     distinct=True,
                 ),
                 other_user_id=Case(When(user1_id=my_user_id, then=F("user2_id")), default=F("user1_id")),
