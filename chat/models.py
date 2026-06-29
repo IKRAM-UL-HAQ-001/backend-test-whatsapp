@@ -56,6 +56,10 @@ class Message(models.Model):
     client_uuid = models.UUIDField(default=uuid.uuid4, db_index=True)
     message_type = models.CharField(max_length=20, choices=MESSAGE_TYPES, default="text")
     reply_to = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="replies")
+    # Snapshot of the status/story this message is a reply to (id, owner, media
+    # url, thumbnail, media type, caption). Stored as a self-contained snapshot
+    # so the chat preview still renders after the original status expires/deletes.
+    status_reply = models.JSONField(null=True, blank=True)
     forwarded_from = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="forwards")
     is_forwarded = models.BooleanField(default=False)
     is_deleted_for_everyone = models.BooleanField(default=False)

@@ -297,6 +297,7 @@ class SendMessage(APIView):
             client_uuid=data.get("client_uuid") or None,
             message_type=data["message_type"],
             reply_to=reply_to,
+            status_reply=data.get("status_reply"),
             forwarded_from=forwarded_from,
             file=upload,
             file_name=upload.name if upload else "",

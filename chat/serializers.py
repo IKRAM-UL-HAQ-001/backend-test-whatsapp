@@ -1,3 +1,5 @@
+import json
+
 from django.conf import settings
 from rest_framework import serializers
 
@@ -76,6 +78,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "encrypted_text",
             "message_type",
             "reply_to",
+            "status_reply",
             "forwarded_from",
             "is_reply",
             "is_own_reply",
@@ -202,6 +205,21 @@ class SendMessageSerializer(serializers.Serializer):
     forwarded_from = serializers.IntegerField(required=False)
     file = serializers.FileField(required=False)
     duration = serializers.FloatField(required=False, allow_null=True)
+    # Sent as a JSON string in multipart form data; parsed to a dict here.
+    status_reply = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_status_reply(self, value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        try:
+            data = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError("status_reply must be valid JSON") from exc
+        if not isinstance(data, dict):
+            raise serializers.ValidationError("status_reply must be a JSON object")
+        return data
 
 
 class DeleteMessageSerializer(serializers.Serializer):
