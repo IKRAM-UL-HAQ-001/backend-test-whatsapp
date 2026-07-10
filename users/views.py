@@ -427,6 +427,40 @@ class LinkedDevices(APIView):
         )
 
 
+class UnlinkDevice(APIView):
+    """
+    POST /auth/linked-devices/unlink/
+    Auth: bearer
+    Request: {"id": 5} (phone logging out one of its linked sessions)
+          or {"token": "..."} (a web session logging itself out)
+    Response: {"message": "Device logged out"}
+    Deactivates the linked session so it disappears from the phone's Linked
+    devices list, and drops the stored JWTs for that session record.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        device_id = request.data.get("id")
+        token = request.data.get("token")
+        sessions = DeviceLinkToken.objects.filter(user=request.user, is_active=True)
+        if device_id is not None:
+            session = sessions.filter(id=device_id).first()
+        elif token:
+            session = sessions.filter(token=str(token)).first()
+        else:
+            return Response({"error": "id or token required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if session is None:
+            return Response({"error": "Linked device not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        session.is_active = False
+        session.access_token = None
+        session.refresh_token = None
+        session.save(update_fields=["is_active", "access_token", "refresh_token"])
+        return Response({"message": "Device logged out"})
+
+
 class ActivateLinkToken(APIView):
     """
     POST /auth/activate-link-token/
