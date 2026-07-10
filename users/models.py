@@ -130,6 +130,10 @@ class DeviceLinkToken(models.Model):
     consumed_at = models.DateTimeField(null=True, blank=True)
     access_token = models.TextField(null=True, blank=True)
     refresh_token = models.TextField(null=True, blank=True)
+    # WhatsApp-style linked-device label, e.g. "Chrome on Linux". Sent by the
+    # web client when it requests the token; shown on the phone's Linked
+    # devices screen. Blank for tokens created before this field existed.
+    device_name = models.CharField(max_length=120, blank=True, default="")
 
     def is_expired(self):
         return timezone.now() > self.created_at + timedelta(minutes=5)

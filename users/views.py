@@ -392,8 +392,39 @@ class GenerateLinkToken(APIView):
             return Response({"error": "Too many link tokens requested"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         token = str(uuid.uuid4())
-        DeviceLinkToken.objects.create(token=token)
+        device_name = (request.GET.get("device_name") or "").strip()[:120]
+        DeviceLinkToken.objects.create(token=token, device_name=device_name)
         return Response({"token": token, "expires_in": 300})
+
+
+class LinkedDevices(APIView):
+    """
+    GET /auth/linked-devices/
+    Auth: bearer (called from the phone)
+    Response: {"devices": [{"id", "device_name", "linked_at"}]}
+    Lists this user's successfully linked web/companion sessions, newest first.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sessions = DeviceLinkToken.objects.filter(
+            user=request.user,
+            is_active=True,
+            consumed_at__isnull=False,
+        ).order_by("-consumed_at")[:20]
+        return Response(
+            {
+                "devices": [
+                    {
+                        "id": s.id,
+                        "device_name": s.device_name or "Unknown device",
+                        "linked_at": s.consumed_at.isoformat() if s.consumed_at else s.created_at.isoformat(),
+                    }
+                    for s in sessions
+                ]
+            }
+        )
 
 
 class ActivateLinkToken(APIView):
