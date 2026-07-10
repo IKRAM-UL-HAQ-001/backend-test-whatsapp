@@ -10,7 +10,7 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -366,24 +366,33 @@ class ListUsers(APIView):
 class GenerateLinkToken(APIView):
     """
     GET /auth/generate-link-token/
-    Auth: bearer
+    Auth: none (WhatsApp-Web style: the *unauthenticated* web client requests a
+    token and shows it as a QR; the logged-in phone then scans and activates it
+    via ActivateLinkToken, which binds the token to the phone's user.)
     Response: {"token": "..."}
     Errors: 429 rate limited
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request):
+        # Rate-limit by client IP since there is no authenticated user yet.
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        client_ip = (
+            forwarded.split(",")[0].strip()
+            if forwarded
+            else request.META.get("REMOTE_ADDR", "anon")
+        )
         if hit_rate_limit(
             "link-generate",
-            str(request.user.id),
+            client_ip,
             settings.LINK_TOKEN_RATE_LIMIT_MAX,
             settings.LINK_TOKEN_RATE_LIMIT_WINDOW_SECONDS,
         ):
             return Response({"error": "Too many link tokens requested"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         token = str(uuid.uuid4())
-        DeviceLinkToken.objects.create(token=token, user=request.user)
+        DeviceLinkToken.objects.create(token=token)
         return Response({"token": token, "expires_in": 300})
 
 
