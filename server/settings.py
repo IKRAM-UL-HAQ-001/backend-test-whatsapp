@@ -18,9 +18,17 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", cast=Csv())
 AUTH_USER_MODEL = "users.User"
 
-CORS_ALLOWED_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+CORS_ALLOWED_ORIGINS = config(
+    "CORS_ALLOWED_ORIGINS",
+    default="http://localhost:3000,http://127.0.0.1:3000",
+    cast=Csv(),
+)
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS=["http://13.207.193.99","http://localhost:3000"]
+CSRF_TRUSTED_ORIGINS = config(
+    "CSRF_TRUSTED_ORIGINS",
+    default="http://13.207.193.99,http://localhost:3000",
+    cast=Csv(),
+)
 
 
 INSTALLED_APPS = [
